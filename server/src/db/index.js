@@ -1,0 +1,30 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
+import { config } from '../config.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+fs.mkdirSync(config.dataDir, { recursive: true });
+fs.mkdirSync(config.uploadsDir, { recursive: true });
+
+// node:sqlite (Node.js 내장 모듈)를 사용한다. better-sqlite3 등 네이티브 모듈은
+// 교사 PC에 Visual Studio Build Tools가 없으면 설치가 안 되는 경우가 많아,
+// Node.js에 이미 포함되어 있어 별도 컴파일이 필요 없는 이 모듈을 택했다.
+export const db = new DatabaseSync(config.dbPath);
+
+// WAL 대신 DELETE 저널 모드: DB가 OneDrive 동기화 폴더 안에 있어
+// 보조 파일(-wal/-shm) 개수를 최소화해 동기화 충돌 위험을 줄인다.
+db.exec('PRAGMA journal_mode = DELETE');
+db.exec('PRAGMA foreign_keys = ON');
+
+const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
+db.exec(schema);
+
+// 가벼운 마이그레이션: schema.sql의 CREATE TABLE IF NOT EXISTS는 이미 만들어진 테이블에
+// 새 컬럼을 추가하지 않으므로, 기존 DB 파일에 없는 컬럼은 여기서 직접 채워준다.
+const examColumns = db.prepare('PRAGMA table_info(exams)').all().map((c) => c.name);
+if (!examColumns.includes('mode')) {
+  db.exec("ALTER TABLE exams ADD COLUMN mode TEXT NOT NULL DEFAULT 'online'");
+}

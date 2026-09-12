@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@theme {
+  /* 토스 앱 스타일 팔레트: 단일 블루 강조색 */
+  --color-bg: #f5f6f8;
+  --color-panel: #ffffff;
+  --color-ink: #1f2430;
+  --color-ink-soft: #5b6270;
+  --color-line: #e2e5ea;
+  --color-accent: #3182f6;
+  --color-accent-soft: #eaf1ff;
+  --color-accent-ink: #14418f;
+  --color-good: #12b76a;
+  --color-warn: #f79009;
+  --color-danger: #f04438;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', 'Segoe UI', sans-serif;
+  line-height: 1.55;
+}
