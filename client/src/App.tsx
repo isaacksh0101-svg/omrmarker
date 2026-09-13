@@ -4,6 +4,7 @@ import { ExamBuilder } from './pages/teacher/exam-builder/ExamBuilder'
 import { ExamResults } from './pages/teacher/ExamResults'
 import { ExamReportPicker } from './pages/teacher/ExamReportPicker'
 import { StandardsReport } from './pages/teacher/StandardsReport'
+import { BackupPage } from './pages/teacher/BackupPage'
 import { RosterPage } from './pages/roster/RosterPage'
 import { StudentJoin } from './pages/student/StudentJoin'
 import { TakeExam } from './pages/student/TakeExam'
@@ -19,6 +20,7 @@ function App() {
         <Route path="/roster" element={<TeacherLayout><RosterPage /></TeacherLayout>} />
         <Route path="/standards-report" element={<TeacherLayout><StandardsReport /></TeacherLayout>} />
         <Route path="/exam-reports" element={<TeacherLayout><ExamReportPicker /></TeacherLayout>} />
+        <Route path="/backup" element={<TeacherLayout><BackupPage /></TeacherLayout>} />
         <Route path="/student" element={<StudentJoin />} />
         <Route path="/student/exam/:examId" element={<TakeExam />} />
       </Routes>

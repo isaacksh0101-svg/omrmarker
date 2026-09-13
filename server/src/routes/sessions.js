@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as repo from '../db/repo.js';
+import { config } from '../config.js';
 
 export const sessionsRouter = Router();
 
@@ -78,7 +79,7 @@ sessionsRouter.get('/:id/sessions/:sessionId', async (req, res) => {
   if (!session) return;
 
   const payload = { ...session };
-  if (session.status === 'submitted') {
+  if (session.status === 'submitted' || session.status === 'force_submitted') {
     payload.answers = await repo.getSessionAnswerSummary(sessionId);
   }
   res.json(payload);
@@ -110,7 +111,7 @@ sessionsRouter.get('/:id/sessions/:sessionId/current-question', async (req, res)
   if (!session) return;
   const exam = await repo.getExamFull(examId);
 
-  if (session.status === 'submitted') {
+  if (session.status === 'submitted' || session.status === 'force_submitted') {
     return res.json({ done: true });
   }
   if (session.status !== 'in_progress') {
@@ -205,6 +206,26 @@ sessionsRouter.post('/:id/sessions/:sessionId/answers', async (req, res) => {
     return res.json({ done: true });
   }
   res.json({ done: false });
+});
+
+sessionsRouter.post('/:id/sessions/:sessionId/warning', async (req, res) => {
+  const examId = Number(req.params.id);
+  const sessionId = Number(req.params.sessionId);
+  const session = await getSessionOr404(examId, sessionId, res);
+  if (!session) return;
+
+  if (session.status !== 'in_progress') {
+    return res.json({
+      warning_count: session.warning_count,
+      counted: false,
+      disqualified: false,
+      max_warnings: config.anticheatMaxWarnings,
+    });
+  }
+
+  const type = req.body.type === 'window_blur' ? 'window_blur' : 'visibility_hidden';
+  const result = await repo.recordWarning(sessionId, type, config.anticheatDebounceMs, config.anticheatMaxWarnings);
+  res.json({ ...result, max_warnings: config.anticheatMaxWarnings });
 });
 
 sessionsRouter.post('/:id/sessions/:sessionId/submit', async (req, res) => {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../api/client';
-import type { CurrentQuestionResponse, ExamSession, PublicExam } from '../../types';
+import type { CurrentQuestionResponse, ExamSession, PublicExam, WarningResponse } from '../../types';
 import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
 import { Badge } from '../../components/Badge';
@@ -76,6 +76,45 @@ export function TakeExam() {
     return () => clearInterval(interval);
   }, [session, exam, id, sessionId, reloadSession]);
 
+  // 응시 중 다른 화면으로 이탈하면(탭 전환, 창 최소화 등) 서버에 기록하고 학생에게도
+  // 즉시 경고 팝업을 띄운다. 정해진 횟수(기본 3회)를 넘기면 서버가 시험을 강제 제출
+  // 처리하므로, 그 결과를 받아 화면도 바로 종료 상태로 전환한다.
+  useEffect(() => {
+    if (session?.status !== 'in_progress') return;
+
+    async function report(type: 'visibility_hidden' | 'window_blur') {
+      try {
+        const res = await api.post<WarningResponse>(`/exams/${id}/sessions/${sessionId}/warning`, { type });
+        if (!res.counted) return;
+        if (res.disqualified) {
+          alert(`화면 이탈이 ${res.warning_count}회 감지되어 시험이 강제 종료되었습니다.`);
+          await reloadSession();
+          setCurrent(null);
+        } else {
+          const remaining = res.max_warnings - res.warning_count;
+          alert(
+            `다른 화면으로 이동한 것이 감지되었습니다. (${res.warning_count}/${res.max_warnings}회)\n${remaining}회 더 감지되면 시험이 강제 종료됩니다.`,
+          );
+        }
+      } catch {
+        // 네트워크 오류 등은 무시 - 경고 기록은 부가 기능이라 시험 진행을 막지 않는다.
+      }
+    }
+    function onVisibilityChange() {
+      if (document.hidden) report('visibility_hidden');
+    }
+    function onBlur() {
+      report('window_blur');
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [session?.status, id, sessionId, reloadSession]);
+
   async function start() {
     const s = await api.post<ExamSession>(`/exams/${id}/sessions/${sessionId}/start`);
     setSession(s);
@@ -99,6 +138,11 @@ export function TakeExam() {
       } else {
         await loadCurrentQuestion();
       }
+    } catch {
+      // 응답 전송 도중 화면 이탈 경고 누적으로 강제 종료됐을 수 있다 - 최신 세션
+      // 상태를 다시 불러와 종료 화면으로 전환한다.
+      await reloadSession();
+      setCurrent(null);
     } finally {
       setSubmitting(false);
     }
@@ -123,14 +167,19 @@ export function TakeExam() {
     );
   }
 
-  if (session.status === 'submitted') {
+  if (session.status === 'submitted' || session.status === 'force_submitted') {
     const pct =
       session.max_score && session.max_score > 0
         ? Math.round(((session.score ?? 0) / session.max_score) * 100)
         : 0;
     return (
       <div className="mx-auto max-w-sm px-6 py-10">
-        <h1 className="text-xl font-bold text-ink">제출 완료</h1>
+        <h1 className="text-xl font-bold text-ink">
+          {session.status === 'force_submitted' ? '시험이 강제 종료되었습니다' : '제출 완료'}
+        </h1>
+        {session.status === 'force_submitted' && (
+          <p className="mt-1 text-sm text-ink-soft">화면 이탈이 반복되어 자동으로 제출되었습니다.</p>
+        )}
         <Card className="mt-4">
           <p className="text-xs font-bold text-ink-soft">점수</p>
           <p className="mt-1 text-2xl font-bold text-ink">

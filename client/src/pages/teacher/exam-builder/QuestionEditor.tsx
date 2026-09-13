@@ -1,15 +1,12 @@
 import { useState } from 'react';
 import { api } from '../../../api/client';
-import type { ExamMode, Question, StandardOption } from '../../../types';
+import type { Question, StandardOption } from '../../../types';
 import { Card } from '../../../components/Card';
 import { Badge } from '../../../components/Badge';
 import { StandardsPicker } from './StandardsPicker';
 
-const CIRCLED_DIGITS = ['①', '②', '③', '④', '⑤', '⑥'];
-
 interface Props {
   examId: number;
-  examMode: ExamMode;
   question: Question;
   index: number;
   standardOptions: StandardOption[];
@@ -17,26 +14,19 @@ interface Props {
   onChanged: () => void;
 }
 
-export function QuestionEditor({
-  examId,
-  examMode,
-  question,
-  index,
-  standardOptions,
-  missingReasons,
-  onChanged,
-}: Props) {
+// 온라인 응시 모드 전용 - 문제 내용/보기 텍스트/배점/성취기준만 다룬다. 정답 표시는
+// 별도 "정답 입력" 그리드(AnswerGridInput)에서 한다(문항 바로 아래일 필요는 없다는 피드백).
+export function QuestionEditor({ examId, question, index, standardOptions, missingReasons, onChanged }: Props) {
   const [prompt, setPrompt] = useState(question.prompt);
   const [points, setPoints] = useState(question.points);
   const [choices, setChoices] = useState(
     question.choices.length > 0
       ? question.choices.map((c) => ({ text: c.text, is_correct: c.is_correct }))
       : [
-          { text: '', is_correct: true },
+          { text: '', is_correct: false },
           { text: '', is_correct: false },
         ],
   );
-  const [shortAnswers, setShortAnswers] = useState((question.correct_short_answers ?? []).join(', '));
   const [savingField, setSavingField] = useState<string | null>(null);
 
   const dirty = prompt !== question.prompt || points !== question.points;
@@ -56,21 +46,6 @@ export function QuestionEditor({
     setSavingField('choices');
     try {
       await api.put(`/exams/${examId}/questions/${question.id}/choices`, { choices: next });
-      onChanged();
-    } finally {
-      setSavingField(null);
-    }
-  }
-
-  async function saveShortAnswers() {
-    const answers = shortAnswers
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (answers.length === 0) return;
-    setSavingField('answer');
-    try {
-      await api.put(`/exams/${examId}/questions/${question.id}/answer`, { correct_short_answers: answers });
       onChanged();
     } finally {
       setSavingField(null);
@@ -98,26 +73,12 @@ export function QuestionEditor({
     setChoices(next);
   }
 
-  function selectCorrect(i: number) {
-    const next = choices.map((c, idx) => ({ ...c, is_correct: idx === i }));
-    saveChoices(next);
-  }
-
   function addChoiceRow() {
     setChoices([...choices, { text: '', is_correct: false }]);
   }
 
   function removeChoiceRow(i: number) {
     const next = choices.filter((_, idx) => idx !== i);
-    saveChoices(next);
-  }
-
-  function quickFillCircledChoices(count: number) {
-    const correctIndex = choices.findIndex((c) => c.is_correct);
-    const next = Array.from({ length: count }, (_, i) => ({
-      text: CIRCLED_DIGITS[i] ?? String(i + 1),
-      is_correct: i === (correctIndex >= 0 && correctIndex < count ? correctIndex : 0),
-    }));
     saveChoices(next);
   }
 
@@ -137,11 +98,7 @@ export function QuestionEditor({
       <textarea
         className="mt-3 w-full resize-none rounded-xl border border-line bg-bg px-3 py-2 text-sm text-ink outline-none focus:border-accent"
         rows={2}
-        placeholder={
-          examMode === 'paper_marking'
-            ? '문제 내용(선택, 성취기준 태깅 참고용 - 비워둬도 확정 가능)'
-            : '문제 내용을 입력하세요'
-        }
+        placeholder="문제 내용을 입력하세요"
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         onBlur={savePromptAndPoints}
@@ -161,31 +118,12 @@ export function QuestionEditor({
         {dirty && savingField === 'prompt' && <span className="text-xs text-ink-soft">저장 중...</span>}
       </div>
 
-      {question.type === 'mc' ? (
+      {question.type === 'mc' && (
         <div className="mt-3 flex flex-col gap-2">
-          {examMode === 'paper_marking' && (
-            <div className="flex items-center gap-2 rounded-lg bg-bg px-2 py-1.5">
-              <span className="text-xs text-ink-soft">선택지 개수로 빠르게 채우기</span>
-              {[4, 5].map((n) => (
-                <button
-                  key={n}
-                  className="rounded-full border border-line px-2 py-0.5 text-xs font-bold text-ink-soft hover:border-accent hover:text-accent"
-                  onClick={() => quickFillCircledChoices(n)}
-                >
-                  {n}지선다
-                </button>
-              ))}
-            </div>
-          )}
+          <span className="text-xs font-bold text-ink-soft">보기 (정답 표시는 아래 "정답 입력"에서)</span>
           {choices.map((c, i) => (
             <div key={i} className="flex items-center gap-2">
-              <input
-                type="radio"
-                name={`correct-${question.id}`}
-                checked={c.is_correct}
-                onChange={() => selectCorrect(i)}
-                title="정답으로 표시"
-              />
+              <span className="w-5 shrink-0 text-xs font-bold text-ink-soft">{i + 1}.</span>
               <input
                 className="flex-1 rounded-lg border border-line bg-bg px-2 py-1 text-sm text-ink outline-none focus:border-accent"
                 placeholder={`보기 ${i + 1}`}
@@ -207,20 +145,6 @@ export function QuestionEditor({
             + 보기 추가
           </button>
         </div>
-      ) : (
-        <div className="mt-3">
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-bold text-ink-soft">
-              정답(쉼표로 여러 개 인정 가능, 예: 통분, 통분하기)
-            </span>
-            <input
-              className="rounded-lg border border-line bg-bg px-2 py-1 text-sm text-ink outline-none focus:border-accent"
-              value={shortAnswers}
-              onChange={(e) => setShortAnswers(e.target.value)}
-              onBlur={saveShortAnswers}
-            />
-          </label>
-        </div>
       )}
 
       <div className="mt-3">
@@ -228,6 +152,7 @@ export function QuestionEditor({
           options={standardOptions}
           selectedCodes={question.standards.map((s) => s.standard_code)}
           onChange={saveStandards}
+          required={question.ai_suggested}
         />
       </div>
 

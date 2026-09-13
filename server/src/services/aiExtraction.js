@@ -57,7 +57,12 @@ function buildResponseSchema(allowedCodes) {
   };
 }
 
-function buildPrompt(gradeLabel, subjectName) {
+function buildPrompt(gradeLabel, subjectName, candidateStandards) {
+  // 코드만 나열하면 모델이 "6수01-01" 같은 코드가 실제로 뭘 말하는지 모른 채(자기가 학습 때 본 것에
+  // 기대어) 찍는 경우가 있었다(예: 분수 나눗셈 문제에 각기둥 성취기준을 고르는 식). 그래서 각 코드가
+  // 무슨 내용인지 여기서 직접 알려주고, 반드시 그 내용을 문제와 비교해서 고르라고 명시한다.
+  const standardsList = candidateStandards.map((s) => `- ${s.code}: ${s.statement}`).join('\n');
+
   return `당신은 초등학교 ${gradeLabel} ${subjectName} 시험지 이미지를 분석하는 보조 도구입니다.
 
 이미지에 있는 문항들을 순서대로 추출하세요. 각 문항에 대해:
@@ -67,9 +72,15 @@ function buildPrompt(gradeLabel, subjectName) {
    뒤에 오는 실제 내용을 반드시 함께 담으세요.** 보기 내용이 분수식·계산식이라 복잡해 보여도 기호만 담고
    끝내지 마세요. 예를 들어 이미지에 "① 15/8 ÷ 5/24"라고 쓰여 있으면 choices의 text는 "① 15/8 ÷ 5/24"
    전체여야 하며, "①"만 담고 실제 식은 prompt 쪽에 남겨두면 안 됩니다.
-4. 이 문항이 어떤 성취기준과 관련 있는지 제공된 성취기준 목록 중에서만 골라 suggested_standards에 담으세요.
-   확신 정도를 confidence(high/medium/low)로, 왜 그렇게 판단했는지 rationale에 간단히 적으세요.
-   목록에 없는 코드는 절대 만들어내지 마세요.
+4. 이 문항과 실제로 같은 주제를 다루는 성취기준을 아래 목록에서만 골라 suggested_standards에 담으세요.
+   **코드만 보고 짐작하지 말고, 코드 옆에 적힌 성취기준 내용을 문제 내용과 직접 비교해서 주제가 정말
+   일치하는지 확인한 뒤에 고르세요.** 예를 들어 문제가 분수의 나눗셈이라면, 목록에 도형(각기둥·각뿔 등)이나
+   측정, 자료와 가능성처럼 다른 영역의 성취기준이 있어도 그건 고르면 안 됩니다 - 반드시 같은 영역·같은
+   주제여야 합니다. 확신 정도를 confidence(high/medium/low)로, 왜 그렇게 판단했는지 rationale에 간단히
+   적으세요. 아래 목록에 없는 코드는 절대 만들어내지 마세요. 정말 맞는 게 없으면 비워두세요.
+
+성취기준 목록(코드: 내용):
+${standardsList}
 
 **중요: 정답이 무엇인지는 절대 판단하거나 표시하지 마세요.** 정답 확정은 교사가 직접 합니다.
 당신의 역할은 문항 내용을 옮겨 적고 성취기준을 제안하는 것까지입니다.`;
@@ -121,7 +132,7 @@ export async function extractQuestionsFromImage({ imageBase64, mimeType, subject
   const gradeLabel = candidateStandards[0].grade_label;
   const subjectName = candidateStandards[0].subject_name;
 
-  const promptText = buildPrompt(gradeLabel, subjectName);
+  const promptText = buildPrompt(gradeLabel, subjectName, candidateStandards);
   const responseSchema = buildResponseSchema(allowedCodes);
 
   const result = await callGemini({ imageBase64, mimeType, promptText, responseSchema });

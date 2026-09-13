@@ -225,7 +225,11 @@ examsRouter.post('/:id/finalize', async (req, res) => {
         reasons.push('정답이 설정되지 않았습니다.');
       }
     }
-    if (q.standards.length === 0) reasons.push('성취기준이 1개 이상 태깅되어야 합니다.');
+    // AI가 불러온 문항은 AI가 제안한 성취기준을 교사가 실제로 확인·확정했는지 보장하기
+    // 위해 태깅을 필수로 한다. 직접 만든 문항은 채점/시간 로깅만 원할 수도 있으므로 선택.
+    if (q.ai_suggested && q.standards.length === 0) {
+      reasons.push('AI로 불러온 문항은 성취기준이 1개 이상 태깅되어야 합니다.');
+    }
 
     if (reasons.length > 0) {
       missing.push({ question_id: q.id, order_index: q.order_index, reasons });

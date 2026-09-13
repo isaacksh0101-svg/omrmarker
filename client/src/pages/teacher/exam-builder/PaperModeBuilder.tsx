@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { Question, StandardOption } from '../../../types';
 import { Card } from '../../../components/Card';
 import { PaperBuildTab } from './PaperBuildTab';
-import { PaperAnswerTab } from './PaperAnswerTab';
+import { AnswerGridInput } from './AnswerGridInput';
 
 interface Props {
   examId: number;
@@ -38,12 +38,17 @@ export function PaperModeBuilder({ examId, questions, standardOptions, missingBy
 
       <div className="mt-4">
         {tab === 'build' ? (
-          <PaperBuildTab examId={examId} questions={questions} onChanged={onChanged} />
-        ) : (
-          <PaperAnswerTab
+          <PaperBuildTab
             examId={examId}
             questions={questions}
             standardOptions={standardOptions}
+            missingByQuestion={missingByQuestion}
+            onChanged={onChanged}
+          />
+        ) : (
+          <AnswerGridInput
+            examId={examId}
+            questions={questions}
             missingByQuestion={missingByQuestion}
             onChanged={onChanged}
           />

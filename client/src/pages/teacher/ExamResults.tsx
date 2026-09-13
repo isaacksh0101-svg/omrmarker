@@ -29,7 +29,23 @@ export function ExamResults() {
 
   useEffect(() => {
     api.get<Exam>(`/exams/${id}`).then(setExam);
-    api.get<ExamResultsData>(`/exams/${id}/results`).then(setData);
+  }, [id]);
+
+  // 학생이 응시 중일 때 교사가 이 화면을 계속 열어두고 지켜보는 경우가 많아서, 새로
+  // 제출되는 대로 화면에 바로 반영되도록 주기적으로 다시 불러온다.
+  useEffect(() => {
+    let cancelled = false;
+    function load() {
+      api.get<ExamResultsData>(`/exams/${id}/results`).then((d) => {
+        if (!cancelled) setData(d);
+      });
+    }
+    load();
+    const interval = setInterval(load, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [id]);
 
   if (!exam || !data) return <div className="p-10 text-sm text-ink-soft">불러오는 중...</div>;
@@ -60,6 +76,7 @@ export function ExamResults() {
           점수: s.score ?? '',
           만점: s.max_score ?? '',
           제출시각: s.submitted_at ? new Date(s.submitted_at).toLocaleString('ko-KR') : '',
+          화면이탈횟수: s.warning_count,
           확인필요: s.isOutlier ? s.outlierReasons.join(', ') : '',
         })),
       },
@@ -82,6 +99,7 @@ export function ExamResults() {
           정답수: s.correct_count,
           전체: s.attempted_count,
           정답률: `${Math.round(s.accuracy * 100)}%`,
+          평균풀이시간: formatMs(s.avg_time_spent_ms),
         })),
       },
     ]);
@@ -159,7 +177,10 @@ export function ExamResults() {
       <Card className="mt-4">
         <h2 className="text-sm font-bold text-ink">성취기준별 정답률 (이 시험)</h2>
         {data.standardsAccuracy.length === 0 ? (
-          <p className="mt-2 text-sm text-ink-soft">아직 제출된 응답이 없습니다.</p>
+          <p className="mt-2 text-sm text-ink-soft">
+            제출된 응답 중 성취기준이 태깅된 문항이 없습니다. 문항에 성취기준을 태깅하면 여기에
+            정답률이 집계됩니다.
+          </p>
         ) : (
           <div className="mt-2 divide-y divide-line">
             {data.standardsAccuracy.map((s) => (
@@ -167,6 +188,7 @@ export function ExamResults() {
                 key={s.code}
                 label={`[${s.code}]`}
                 sublabel={s.statement}
+                extra={`평균 ${formatMs(s.avg_time_spent_ms)}`}
                 correct={s.correct_count}
                 total={s.attempted_count}
               />
@@ -200,7 +222,10 @@ export function ExamResults() {
                   {s.submitted_at ? new Date(s.submitted_at).toLocaleString('ko-KR') : '-'}
                 </td>
                 <td className="px-4 py-2.5">
-                  {s.isOutlier && <Badge tone="warn">{s.outlierReasons.join(', ')}</Badge>}
+                  <div className="flex flex-wrap gap-1">
+                    {s.isOutlier && <Badge tone="warn">{s.outlierReasons.join(', ')}</Badge>}
+                    {s.warning_count > 0 && <Badge tone="danger">화면 이탈 {s.warning_count}회</Badge>}
+                  </div>
                 </td>
               </tr>
             ))}

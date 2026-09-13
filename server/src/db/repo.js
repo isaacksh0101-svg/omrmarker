@@ -6,7 +6,8 @@ function now() {
   return new Date().toISOString();
 }
 
-const CIRCLED_DIGITS = ['①', '②', '③', '④', '⑤', '⑥'];
+// 원문자(①②③...)는 폰트/환경에 따라 깨져 보이는 경우가 있어 그냥 숫자를 쓴다.
+const CHOICE_DIGITS = ['1', '2', '3', '4', '5', '6'];
 
 // ---- exams ----
 
@@ -42,7 +43,7 @@ export async function getExamFull(id) {
 
 export async function listExams() {
   return db
-    .prepare('SELECT id, title, subject_id, grade_cluster, time_limit_sec, status, started_at, created_at FROM exams ORDER BY created_at DESC')
+    .prepare('SELECT id, title, subject_id, grade_cluster, time_limit_sec, mode, status, started_at, created_at FROM exams ORDER BY created_at DESC')
     .all();
 }
 
@@ -104,13 +105,13 @@ export async function batchCreateQuestions(examId, { mc4, mc5, short }) {
   let order = maxOrder + 1;
   for (let i = 0; i < mc4; i++, order++) {
     const { lastInsertRowid } = await insertQuestion.run(examId, order, now(), now());
-    for (const [ci, label] of CIRCLED_DIGITS.slice(0, 4).entries()) {
+    for (const [ci, label] of CHOICE_DIGITS.slice(0, 4).entries()) {
       await insertChoice.run(lastInsertRowid, ci, label);
     }
   }
   for (let i = 0; i < mc5; i++, order++) {
     const { lastInsertRowid } = await insertQuestion.run(examId, order, now(), now());
-    for (const [ci, label] of CIRCLED_DIGITS.slice(0, 5).entries()) {
+    for (const [ci, label] of CHOICE_DIGITS.slice(0, 5).entries()) {
       await insertChoice.run(lastInsertRowid, ci, label);
     }
   }
@@ -303,9 +304,43 @@ export async function advanceSession(sessionId, nextIndex) {
   await db.prepare('UPDATE exam_sessions SET current_question_index = ? WHERE id = ?').run(nextIndex, sessionId);
 }
 
-export async function finalizeSession(sessionId) {
+// 화면 이탈/포커스 아웃 이벤트를 기록한다. 짧은 시간 안에 연달아 들어오는 이벤트
+// (예: 탭 전환 한 번에 visibility_hidden과 window_blur가 거의 동시에 발생)는 한 번의
+// 부정행위 시도로 보고 debounceMs 안에 들어오면 카운트하지 않되, 로그 자체는 남긴다.
+export async function recordWarning(sessionId, type, debounceMs, maxWarnings) {
   const session = await getSession(sessionId);
-  if (!session || session.status === 'submitted') return;
+  if (!session) return null;
+
+  const last = await db
+    .prepare('SELECT occurred_at FROM warning_events WHERE session_id = ? AND counted = 1 ORDER BY id DESC LIMIT 1')
+    .get(sessionId);
+
+  const nowIso = now();
+  const withinDebounce = !!last && new Date(nowIso).getTime() - new Date(last.occurred_at).getTime() < debounceMs;
+  const counted = withinDebounce ? 0 : 1;
+  const resultingCount = session.warning_count + counted;
+
+  await db
+    .prepare(
+      'INSERT INTO warning_events (session_id, type, occurred_at, counted, resulting_warning_count) VALUES (?, ?, ?, ?, ?)',
+    )
+    .run(sessionId, type, nowIso, counted, resultingCount);
+
+  let disqualified = false;
+  if (counted) {
+    await db.prepare('UPDATE exam_sessions SET warning_count = ? WHERE id = ?').run(resultingCount, sessionId);
+    if (resultingCount >= maxWarnings && session.status === 'in_progress') {
+      await finalizeSession(sessionId, 'force_submitted');
+      disqualified = true;
+    }
+  }
+
+  return { warning_count: resultingCount, counted: !!counted, disqualified };
+}
+
+export async function finalizeSession(sessionId, status = 'submitted') {
+  const session = await getSession(sessionId);
+  if (!session || session.status === 'submitted' || session.status === 'force_submitted') return;
 
   const totals = await db
     .prepare(
@@ -318,10 +353,8 @@ export async function finalizeSession(sessionId) {
     .get(session.exam_id, sessionId);
 
   await db
-    .prepare(
-      "UPDATE exam_sessions SET status = 'submitted', submitted_at = ?, score = ?, max_score = ? WHERE id = ?",
-    )
-    .run(now(), totals.score, totals.max_score, sessionId);
+    .prepare('UPDATE exam_sessions SET status = ?, submitted_at = ?, score = ?, max_score = ? WHERE id = ?')
+    .run(status, now(), totals.score, totals.max_score, sessionId);
 }
 
 // ---- 교사용 결과 집계 ----
@@ -329,7 +362,7 @@ export async function finalizeSession(sessionId) {
 export async function getResultsForExam(examId) {
   const sessions = await db
     .prepare(
-      `SELECT es.roll_number, r.name, es.status, es.score, es.max_score, es.submitted_at,
+      `SELECT es.roll_number, r.name, es.status, es.score, es.max_score, es.submitted_at, es.warning_count,
               (SELECT COALESCE(SUM(a.time_spent_ms), 0) FROM answers a WHERE a.session_id = es.id) AS total_time_ms
        FROM exam_sessions es
        LEFT JOIN roster r ON r.roll_number = es.roll_number
@@ -389,7 +422,8 @@ export async function computeStandardsAccuracy({ examId, rollNumber, from, to } 
     .prepare(
       `SELECT qs.standard_code AS code,
               COUNT(*) AS attempted_count,
-              COALESCE(SUM(a.is_correct), 0) AS correct_count
+              COALESCE(SUM(a.is_correct), 0) AS correct_count,
+              AVG(a.time_spent_ms) AS avg_time_spent_ms
        FROM answers a
        JOIN questions q ON q.id = a.question_id
        JOIN question_standards qs ON qs.question_id = q.id
@@ -412,6 +446,7 @@ export async function computeStandardsAccuracy({ examId, rollNumber, from, to } 
         attempted_count: r.attempted_count,
         correct_count: r.correct_count,
         accuracy: r.attempted_count > 0 ? r.correct_count / r.attempted_count : 0,
+        avg_time_spent_ms: r.avg_time_spent_ms ?? null,
       };
     })
     .filter(Boolean);

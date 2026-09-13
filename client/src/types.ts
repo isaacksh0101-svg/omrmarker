@@ -107,6 +107,13 @@ export interface PublicQuestion {
   choices: PublicChoice[];
 }
 
+export interface WarningResponse {
+  warning_count: number;
+  counted: boolean;
+  disqualified: boolean;
+  max_warnings: number;
+}
+
 export interface CurrentQuestionResponse {
   done: boolean;
   timedOut?: boolean;
@@ -139,6 +146,7 @@ export interface StandardAccuracy {
   attempted_count: number;
   correct_count: number;
   accuracy: number;
+  avg_time_spent_ms: number | null;
 }
 
 export interface ExamResultSession {
@@ -149,6 +157,7 @@ export interface ExamResultSession {
   max_score: number | null;
   submitted_at: string | null;
   total_time_ms: number;
+  warning_count: number;
   isOutlier: boolean;
   outlierReasons: string[];
 }

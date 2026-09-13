@@ -38,6 +38,17 @@ if errorlevel 1 (
     exit /b 1
 )
 
+powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort 4000 -State Listen -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
+if errorlevel 1 (
+    echo.
+    echo [안내] OMR 프로그램이 이미 실행 중인 것 같습니다 ^(포트 4000번이 사용 중입니다^).
+    echo 이미 열려 있는 OMR 프로그램 창이 있다면 그 창을 사용해 주세요.
+    echo 그런 창이 없는데 이 메시지가 계속 뜨면 컴퓨터를 재시작한 뒤 다시 실행해 주세요.
+    echo.
+    pause
+    exit /b 1
+)
+
 if not exist "node_modules\concurrently" (
     echo [OMR] 처음 실행이라 필요한 패키지를 설치합니다.
     echo 인터넷 연결 상태에 따라 몇 분 정도 걸릴 수 있습니다.

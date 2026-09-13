@@ -8,6 +8,7 @@ import { Badge } from '../../../components/Badge';
 import { QuestionEditor } from './QuestionEditor';
 import { AiUploadPanel } from './AiUploadPanel';
 import { PaperModeBuilder } from './PaperModeBuilder';
+import { AnswerGridInput } from './AnswerGridInput';
 
 const GRADE_LABEL: Record<string, string> = {
   elem_1_2: '1~2학년군',
@@ -19,6 +20,7 @@ export function ExamBuilder() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [exam, setExam] = useState<Exam | null>(null);
+  const [tab, setTab] = useState<'build' | 'answers'>('build');
   const [standardOptions, setStandardOptions] = useState<StandardOption[]>([]);
   const [missing, setMissing] = useState<FinalizeMissing[] | null>(null);
   const [finalizeError, setFinalizeError] = useState<string | null>(null);
@@ -55,8 +57,8 @@ export function ExamBuilder() {
     setMissing(null);
     setFinalizeError(null);
     try {
-      const updated = await api.post<Exam>(`/exams/${id}/finalize`);
-      setExam(updated);
+      await api.post<Exam>(`/exams/${id}/finalize`);
+      navigate('/');
     } catch (e) {
       if (e instanceof ApiError && e.status === 400) {
         const body = e.body as { error: string; missing?: FinalizeMissing[] };
@@ -106,36 +108,73 @@ export function ExamBuilder() {
           />
         </div>
       ) : (
-        <>
-          <div className="mt-6">
-            <AiUploadPanel examId={exam.id} onExtracted={reload} />
+        <Card className="mt-6">
+          <div className="flex gap-1 rounded-full bg-bg p-1">
+            <button
+              className={`flex-1 rounded-full px-3 py-1.5 text-sm font-bold transition-colors duration-150 ${
+                tab === 'build' ? 'bg-panel text-ink shadow-sm' : 'text-ink-soft'
+              }`}
+              onClick={() => setTab('build')}
+            >
+              1. 문항 만들기
+            </button>
+            <button
+              className={`flex-1 rounded-full px-3 py-1.5 text-sm font-bold transition-colors duration-150 ${
+                tab === 'answers' ? 'bg-panel text-ink shadow-sm' : 'text-ink-soft'
+              }`}
+              onClick={() => setTab('answers')}
+            >
+              2. 정답 입력
+            </button>
           </div>
 
-          <div className="mt-6 flex flex-col gap-4">
-            {(exam.questions ?? []).map((q, i) => (
-              <QuestionEditor
-                key={q.id}
-                examId={exam.id}
-                examMode={exam.mode}
-                question={q}
-                index={i}
-                standardOptions={standardOptions}
-                missingReasons={missingByQuestion.get(q.id)}
-                onChanged={reload}
-              />
-            ))}
-          </div>
+          <div className="mt-4">
+            {tab === 'build' ? (
+              <>
+                <AiUploadPanel examId={exam.id} onExtracted={reload} />
 
-          <div className="mt-4 flex gap-2">
-            <Button variant="secondary" onClick={() => addQuestion('mc')}>
-              + 객관식 문항 추가
-            </Button>
-            <Button variant="secondary" onClick={() => addQuestion('short')}>
-              + 단답형 문항 추가
-            </Button>
+                <div className="mt-6 flex flex-col gap-4">
+                  {(exam.questions ?? []).map((q, i) => (
+                    <QuestionEditor
+                      key={q.id}
+                      examId={exam.id}
+                      question={q}
+                      index={i}
+                      standardOptions={standardOptions}
+                      missingReasons={missingByQuestion.get(q.id)}
+                      onChanged={reload}
+                    />
+                  ))}
+                </div>
+
+                <div className="mt-4 flex gap-2">
+                  <Button variant="secondary" onClick={() => addQuestion('mc')}>
+                    + 객관식 문항 추가
+                  </Button>
+                  <Button variant="secondary" onClick={() => addQuestion('short')}>
+                    + 단답형 문항 추가
+                  </Button>
+                </div>
+                {actionError && <p className="mt-2 text-xs font-bold text-danger">{actionError}</p>}
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-ink-soft">
+                  정답지를 보면서 순서대로 빠르게 입력하세요. 객관식은 정답 번호를, 단답형은 정답을
+                  입력합니다.
+                </p>
+                <div className="mt-3">
+                  <AnswerGridInput
+                    examId={exam.id}
+                    questions={exam.questions ?? []}
+                    missingByQuestion={missingByQuestion}
+                    onChanged={reload}
+                  />
+                </div>
+              </>
+            )}
           </div>
-          {actionError && <p className="mt-2 text-xs font-bold text-danger">{actionError}</p>}
-        </>
+        </Card>
       )}
 
       <Card className="mt-8">
@@ -143,7 +182,8 @@ export function ExamBuilder() {
           <div>
             <h2 className="text-sm font-bold text-ink">시험 확정</h2>
             <p className="mt-1 text-xs text-ink-soft">
-              모든 문항에 정답과 성취기준이 설정되어야 확정할 수 있습니다.
+              모든 문항에 정답이 설정되어야 확정할 수 있습니다. 성취기준 태깅은 선택이지만, AI로
+              불러온 문항은 태깅이 필수입니다.
             </p>
           </div>
           <Button onClick={finalize} disabled={finalizing || (exam.questions ?? []).length === 0}>

@@ -1,18 +1,24 @@
 interface Props {
   label: string;
   sublabel?: string;
+  extra?: string;
   correct: number;
   total: number;
 }
 
-export function AccuracyRow({ label, sublabel, correct, total }: Props) {
+export function AccuracyRow({ label, sublabel, extra, correct, total }: Props) {
   const pct = total > 0 ? Math.round((correct / total) * 100) : 0;
 
   return (
     <div className="flex items-center gap-3 py-2">
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-bold text-ink">{label}</p>
-        {sublabel && <p className="mt-0.5 truncate text-xs text-ink-soft">{sublabel}</p>}
+        {sublabel && (
+          <p className="mt-0.5 flex items-baseline gap-1 text-xs text-ink-soft">
+            <span className="truncate">{sublabel}</span>
+            {extra && <span className="shrink-0">· {extra}</span>}
+          </p>
+        )}
       </div>
       <span className="w-16 shrink-0 text-right text-xs text-ink-soft">
         {correct}/{total}문제

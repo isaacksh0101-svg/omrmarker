@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../../../api/client';
-import type { Question } from '../../../types';
+import type { Question, StandardOption } from '../../../types';
 import { Badge } from '../../../components/Badge';
 import { Button } from '../../../components/Button';
 import { IconGrip } from '../../../components/icons';
 import { AiUploadPanel } from './AiUploadPanel';
+import { StandardsPicker } from './StandardsPicker';
 
 interface Props {
   examId: number;
   questions: Question[];
+  standardOptions: StandardOption[];
+  missingByQuestion: Map<number, string[]>;
   onChanged: () => void;
 }
 
@@ -17,7 +20,7 @@ function typeLabel(q: Question) {
   return `객관식(${q.choices.length}지선다)`;
 }
 
-export function PaperBuildTab({ examId, questions, onChanged }: Props) {
+export function PaperBuildTab({ examId, questions, standardOptions, missingByQuestion, onChanged }: Props) {
   const [mc4, setMc4] = useState('');
   const [mc5, setMc5] = useState('');
   const [short, setShort] = useState('');
@@ -54,6 +57,11 @@ export function PaperBuildTab({ examId, questions, onChanged }: Props) {
   async function deleteQuestion(id: number) {
     if (!confirm('이 문항을 삭제할까요?')) return;
     await api.delete(`/exams/${examId}/questions/${id}`);
+    onChanged();
+  }
+
+  async function saveStandards(qid: number, codes: string[]) {
+    await api.put(`/exams/${examId}/questions/${qid}/standards`, { codes });
     onChanged();
   }
 
@@ -123,6 +131,7 @@ export function PaperBuildTab({ examId, questions, onChanged }: Props) {
         {order.map((id, i) => {
           const q = byId.get(id);
           if (!q) return null;
+          const missingReasons = missingByQuestion.get(id);
           return (
             <div
               key={id}
@@ -130,18 +139,31 @@ export function PaperBuildTab({ examId, questions, onChanged }: Props) {
               onDragStart={() => (dragId.current = id)}
               onDragOver={(e) => onDragOver(e, id)}
               onDrop={onDrop}
-              className="flex items-center gap-3 rounded-xl border border-line bg-bg px-3 py-2.5"
+              className={`rounded-xl border px-3 py-2.5 ${missingReasons ? 'border-danger' : 'border-line'} bg-bg`}
             >
-              <IconGrip className="h-5 w-5 shrink-0 cursor-grab text-ink-soft" />
-              <span className="w-8 shrink-0 text-sm font-bold text-ink-soft">{i + 1}.</span>
-              <span className="flex-1 text-sm text-ink">{typeLabel(q)}</span>
-              {q.ai_suggested && <Badge tone="warn">AI 추출 - 확인 필요</Badge>}
-              <button
-                className="text-xs text-ink-soft hover:text-danger"
-                onClick={() => deleteQuestion(id)}
-              >
-                삭제
-              </button>
+              <div className="flex items-center gap-3">
+                <IconGrip className="h-5 w-5 shrink-0 cursor-grab text-ink-soft" />
+                <span className="w-8 shrink-0 text-sm font-bold text-ink-soft">{i + 1}.</span>
+                <span className="flex-1 text-sm text-ink">{typeLabel(q)}</span>
+                {q.ai_suggested && <Badge tone="warn">AI 추출 - 확인 필요</Badge>}
+                <button
+                  className="text-xs text-ink-soft hover:text-danger"
+                  onClick={() => deleteQuestion(id)}
+                >
+                  삭제
+                </button>
+              </div>
+              <div className="mt-2">
+                <StandardsPicker
+                  options={standardOptions}
+                  selectedCodes={q.standards.map((s) => s.standard_code)}
+                  onChange={(codes) => saveStandards(id, codes)}
+                  required={q.ai_suggested}
+                />
+              </div>
+              {missingReasons && (
+                <p className="mt-1.5 text-xs font-bold text-danger">{missingReasons.join(', ')}</p>
+              )}
             </div>
           );
         })}

@@ -23,4 +23,5 @@ export const config = {
     model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
   },
   anticheatDebounceMs: Number(process.env.ANTICHEAT_DEBOUNCE_MS) || 2000,
+  anticheatMaxWarnings: Number(process.env.ANTICHEAT_MAX_WARNINGS) || 3,
 };
