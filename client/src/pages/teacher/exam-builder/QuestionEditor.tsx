@@ -22,10 +22,7 @@ export function QuestionEditor({ examId, question, index, standardOptions, missi
   const [choices, setChoices] = useState(
     question.choices.length > 0
       ? question.choices.map((c) => ({ text: c.text, is_correct: c.is_correct }))
-      : [
-          { text: '', is_correct: false },
-          { text: '', is_correct: false },
-        ],
+      : Array.from({ length: 5 }, () => ({ text: '', is_correct: false })),
   );
   const [savingField, setSavingField] = useState<string | null>(null);
 

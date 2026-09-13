@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../../api/client';
+import { api, ApiError } from '../../api/client';
 import type { Exam, Subject } from '../../types';
 import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
@@ -22,7 +22,9 @@ export function Dashboard() {
   const navigate = useNavigate();
   const [exams, setExams] = useState<Exam[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [subjectFilter, setSubjectFilter] = useState<string>('all');
   const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [form, setForm] = useState({
     title: '',
     subject_id: '',
@@ -56,21 +58,45 @@ export function Dashboard() {
     }
   }
 
-  return (
-    <div className="mx-auto max-w-3xl px-4 py-10">
-      <h1 className="text-xl font-bold text-ink">시험지 관리</h1>
+  async function deleteExam(exam: Exam, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (
+      !confirm(
+        `"${exam.title}" 시험지를 삭제할까요?\n목록에서 사라지지만, 이미 응시한 결과는 계속 보관되어 시험별 리포트에서 확인할 수 있습니다.`,
+      )
+    ) {
+      return;
+    }
+    setDeletingId(exam.id);
+    try {
+      await api.delete(`/exams/${exam.id}`);
+      setExams((prev) => prev.filter((e2) => e2.id !== exam.id));
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : '삭제 중 오류가 발생했습니다.');
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
-      <Card className="mt-6">
+  const visibleExams = exams.filter(
+    (exam) => exam.status !== 'archived' && (subjectFilter === 'all' || exam.subject_id === subjectFilter),
+  );
+
+  return (
+    <div className="mx-auto max-w-3xl px-6 py-12">
+      <h1 className="animate-fade-in-up text-2xl font-bold tracking-tight text-ink">시험지 관리</h1>
+
+      <Card className="animate-fade-in-up mt-7">
         <h2 className="text-sm font-bold text-ink">새 시험 만들기</h2>
 
         <div className="mt-3 flex flex-col gap-1">
           <span className="text-xs font-bold text-ink-soft">응시 방식</span>
           <div className="grid grid-cols-2 gap-2">
             <button
-              className={`rounded-xl border px-3 py-2 text-left text-sm ${
+              className={`rounded-2xl border px-3.5 py-2.5 text-left text-sm transition-all duration-200 ${
                 form.mode === 'online'
                   ? 'border-accent bg-accent-soft text-accent-ink'
-                  : 'border-line bg-bg text-ink-soft'
+                  : 'border-line bg-bg text-ink-soft hover:border-accent/40'
               }`}
               onClick={() => setForm({ ...form, mode: 'online' })}
             >
@@ -78,10 +104,10 @@ export function Dashboard() {
               <p className="mt-0.5 text-xs">화면에서 문제를 읽고 풉니다</p>
             </button>
             <button
-              className={`rounded-xl border px-3 py-2 text-left text-sm ${
+              className={`rounded-2xl border px-3.5 py-2.5 text-left text-sm transition-all duration-200 ${
                 form.mode === 'paper_marking'
                   ? 'border-accent bg-accent-soft text-accent-ink'
-                  : 'border-line bg-bg text-ink-soft'
+                  : 'border-line bg-bg text-ink-soft hover:border-accent/40'
               }`}
               onClick={() => setForm({ ...form, mode: 'paper_marking' })}
             >
@@ -145,16 +171,46 @@ export function Dashboard() {
         </Button>
       </Card>
 
-      <div className="mt-8">
+      <div className="animate-fade-in-up mt-9" style={{ animationDelay: '60ms' }}>
         <h2 className="text-sm font-bold text-ink">시험 목록</h2>
+
+        {exams.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            <button
+              onClick={() => setSubjectFilter('all')}
+              className={`rounded-full px-3 py-1 text-xs font-bold transition-colors duration-150 ${
+                subjectFilter === 'all' ? 'bg-accent text-white' : 'bg-surface-container text-ink-soft hover:bg-line'
+              }`}
+            >
+              전체
+            </button>
+            {subjects.map((s) => (
+              <button
+                key={s.subject_id}
+                onClick={() => setSubjectFilter(s.subject_id)}
+                className={`rounded-full px-3 py-1 text-xs font-bold transition-colors duration-150 ${
+                  subjectFilter === s.subject_id
+                    ? 'bg-accent text-white'
+                    : 'bg-surface-container text-ink-soft hover:bg-line'
+                }`}
+              >
+                {s.subject_name}
+              </button>
+            ))}
+          </div>
+        )}
+
         {exams.length === 0 ? (
           <p className="mt-3 text-sm text-ink-soft">아직 만든 시험이 없습니다.</p>
+        ) : visibleExams.length === 0 ? (
+          <p className="mt-3 text-sm text-ink-soft">이 교과로 만든 시험이 없습니다.</p>
         ) : (
           <div className="mt-3 flex flex-col gap-2">
-            {exams.map((exam) => (
+            {visibleExams.map((exam, i) => (
               <Card
                 key={exam.id}
-                className="flex cursor-pointer items-center justify-between hover:border-accent"
+                className="animate-fade-in-up flex cursor-pointer items-center justify-between transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/60 hover:shadow-[0_4px_12px_rgba(16,24,40,0.08)]"
+                style={{ animationDelay: `${Math.min(i, 12) * 30}ms` }}
                 onClick={() => navigate(`/exams/${exam.id}`)}
               >
                 <div>
@@ -178,6 +234,13 @@ export function Dashboard() {
                     </button>
                   )}
                   <Badge tone={STATUS_BADGE[exam.status].tone}>{STATUS_BADGE[exam.status].label}</Badge>
+                  <button
+                    className="text-xs font-bold text-ink-soft hover:text-danger disabled:opacity-50"
+                    disabled={deletingId === exam.id}
+                    onClick={(e) => deleteExam(exam, e)}
+                  >
+                    삭제
+                  </button>
                 </div>
               </Card>
             ))}

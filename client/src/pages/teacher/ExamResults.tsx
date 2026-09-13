@@ -106,19 +106,19 @@ export function ExamResults() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
-      <button className="text-xs font-bold text-ink-soft hover:text-accent" onClick={() => navigate('/')}>
+    <div className="mx-auto max-w-3xl px-6 py-12">
+      <button className="text-xs font-bold text-ink-soft transition-colors duration-150 hover:text-accent" onClick={() => navigate('/')}>
         ← 대시보드
       </button>
-      <div className="mt-3 flex items-center gap-2">
-        <h1 className="text-xl font-bold text-ink">{exam.title}</h1>
+      <div className="animate-fade-in-up mt-3 flex items-center gap-2">
+        <h1 className="text-2xl font-bold tracking-tight text-ink">{exam.title}</h1>
         <Badge tone="neutral">결과</Badge>
         <button className="ml-auto text-xs font-bold text-accent hover:underline" onClick={exportExcel}>
           엑셀로 다운로드
         </button>
       </div>
 
-      <div className="mt-6">
+      <div className="animate-fade-in-up mt-7" style={{ animationDelay: '40ms' }}>
         <StatCardRow>
           <StatCard label="응시 인원" value={`${data.sessions.length}명`} />
           <StatCard label="제출 완료" value={`${submitted.length}명`} />
@@ -128,7 +128,7 @@ export function ExamResults() {
       </div>
 
       {(data.slowestQuestions.length > 0 || data.lowestAccuracyQuestions.length > 0) && (
-        <Card className="mt-6">
+        <Card className="animate-fade-in-up mt-6" style={{ animationDelay: '80ms' }}>
           <h2 className="text-sm font-bold text-ink">주목할 문항</h2>
           <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
@@ -155,7 +155,7 @@ export function ExamResults() {
         </Card>
       )}
 
-      <Card className="mt-4">
+      <Card className="animate-fade-in-up mt-4" style={{ animationDelay: '110ms' }}>
         <h2 className="text-sm font-bold text-ink">문항별 정답률</h2>
         <div className="mt-2 divide-y divide-line">
           {data.questionStats.map((q) => (
@@ -174,7 +174,7 @@ export function ExamResults() {
         </div>
       </Card>
 
-      <Card className="mt-4">
+      <Card className="animate-fade-in-up mt-4" style={{ animationDelay: '140ms' }}>
         <h2 className="text-sm font-bold text-ink">성취기준별 정답률 (이 시험)</h2>
         {data.standardsAccuracy.length === 0 ? (
           <p className="mt-2 text-sm text-ink-soft">
@@ -197,47 +197,49 @@ export function ExamResults() {
         )}
       </Card>
 
-      <Card className="mt-4 p-0">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-line text-left text-xs font-bold text-ink-soft">
-              <th className="px-4 py-2.5">번호</th>
-              <th className="px-4 py-2.5">이름</th>
-              <th className="px-4 py-2.5">상태</th>
-              <th className="px-4 py-2.5">점수</th>
-              <th className="px-4 py-2.5">제출시각</th>
-              <th className="px-4 py-2.5">확인 필요</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.sessions.map((s) => (
-              <tr key={s.roll_number} className="border-b border-line last:border-0">
-                <td className="px-4 py-2.5 font-bold text-ink">{s.roll_number}</td>
-                <td className="px-4 py-2.5 text-ink-soft">{s.name || '-'}</td>
-                <td className="px-4 py-2.5 text-ink-soft">{STATUS_LABEL[s.status] ?? s.status}</td>
-                <td className="px-4 py-2.5 text-ink-soft">
-                  {s.status === 'submitted' ? `${s.score} / ${s.max_score}` : '-'}
-                </td>
-                <td className="px-4 py-2.5 text-ink-soft">
-                  {s.submitted_at ? new Date(s.submitted_at).toLocaleString('ko-KR') : '-'}
-                </td>
-                <td className="px-4 py-2.5">
-                  <div className="flex flex-wrap gap-1">
-                    {s.isOutlier && <Badge tone="warn">{s.outlierReasons.join(', ')}</Badge>}
-                    {s.warning_count > 0 && <Badge tone="danger">화면 이탈 {s.warning_count}회</Badge>}
-                  </div>
-                </td>
+      <Card className="animate-fade-in-up mt-4 overflow-hidden p-0" style={{ animationDelay: '170ms' }}>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[42rem] text-sm">
+            <thead>
+              <tr className="border-b border-line text-left text-xs font-bold text-ink-soft">
+                <th className="whitespace-nowrap px-4 py-2.5">번호</th>
+                <th className="whitespace-nowrap px-4 py-2.5">이름</th>
+                <th className="whitespace-nowrap px-4 py-2.5">상태</th>
+                <th className="whitespace-nowrap px-4 py-2.5">점수</th>
+                <th className="whitespace-nowrap px-4 py-2.5">제출시각</th>
+                <th className="whitespace-nowrap px-4 py-2.5">확인 필요</th>
               </tr>
-            ))}
-            {data.sessions.length === 0 && (
-              <tr>
-                <td colSpan={6} className="px-4 py-4 text-center text-ink-soft">
-                  아직 참여한 학생이 없습니다.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {data.sessions.map((s) => (
+                <tr key={s.roll_number} className="border-b border-line last:border-0">
+                  <td className="whitespace-nowrap px-4 py-2.5 font-bold text-ink">{s.roll_number}</td>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-ink-soft">{s.name || '-'}</td>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-ink-soft">{STATUS_LABEL[s.status] ?? s.status}</td>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-ink-soft">
+                    {s.status === 'submitted' ? `${s.score} / ${s.max_score}` : '-'}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-ink-soft">
+                    {s.submitted_at ? new Date(s.submitted_at).toLocaleString('ko-KR') : '-'}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <div className="flex flex-wrap gap-1">
+                      {s.isOutlier && <Badge tone="warn">{s.outlierReasons.join(', ')}</Badge>}
+                      {s.warning_count > 0 && <Badge tone="danger">화면 이탈 {s.warning_count}회</Badge>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {data.sessions.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-4 text-center text-ink-soft">
+                    아직 참여한 학생이 없습니다.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </Card>
     </div>
   );

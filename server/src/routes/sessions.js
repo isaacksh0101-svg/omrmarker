@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as repo from '../db/repo.js';
 import { config } from '../config.js';
+import { emitExamMonitorUpdate } from '../lib/realtime.js';
 
 export const sessionsRouter = Router();
 
@@ -58,6 +59,15 @@ sessionsRouter.post('/:id/sessions', async (req, res) => {
   let session = await repo.getSessionByExamAndRoll(examId, rollNumber);
   if (!session) {
     session = await repo.createSession(examId, rollNumber);
+    emitExamMonitorUpdate(examId);
+  }
+
+  // 교사가 이미 '시험 시작'을 눌러 시험이 진행 중이면, 뒤늦게 들어오는 학생도 대기
+  // 화면 없이 바로 응시로 들어간다.
+  if (exam.started_at && session.status === 'joined') {
+    await repo.startSession(session.id);
+    session = await repo.getSession(session.id);
+    emitExamMonitorUpdate(examId);
   }
 
   res.status(201).json(session);
@@ -85,17 +95,31 @@ sessionsRouter.get('/:id/sessions/:sessionId', async (req, res) => {
   res.json(payload);
 });
 
-sessionsRouter.post('/:id/sessions/:sessionId/start', async (req, res) => {
+// 교사가 '시험 감독' 화면에서 누른다. 대기 중(joined)인 학생 전원을 한 번에 응시로
+// 전환하고, 이후 들어오는 학생도 곧장 응시로 들어가도록 exam.started_at을 남긴다.
+sessionsRouter.post('/:id/start', async (req, res) => {
   const examId = Number(req.params.id);
-  const sessionId = Number(req.params.sessionId);
-  const session = await getSessionOr404(examId, sessionId, res);
-  if (!session) return;
-
-  if (session.status !== 'joined') {
-    return res.json(session);
+  const exam = await repo.getExam(examId);
+  if (!exam || exam.status !== 'finalized') {
+    return res.status(400).json({ error: '확정된 시험만 시작할 수 있습니다.' });
   }
-  await repo.startSession(sessionId);
-  res.json(await repo.getSession(sessionId));
+
+  await repo.markExamStarted(examId);
+  const started = await repo.startAllJoinedSessions(examId);
+  emitExamMonitorUpdate(examId);
+  res.json({ started });
+});
+
+// 교사가 '시험 감독' 화면에서 누른다. 아직 대기/응시 중인 학생 전원을 지금까지 낸 답만으로
+// 한 번에 강제 제출 처리해 시험을 완전히 끝낸다.
+sessionsRouter.post('/:id/end-all', async (req, res) => {
+  const examId = Number(req.params.id);
+  const exam = await repo.getExam(examId);
+  if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
+
+  const ended = await repo.endAllActiveSessions(examId);
+  emitExamMonitorUpdate(examId);
+  res.json({ ended });
 });
 
 function isTimedOut(session, exam) {
@@ -120,12 +144,14 @@ sessionsRouter.get('/:id/sessions/:sessionId/current-question', async (req, res)
 
   if (isTimedOut(session, exam)) {
     await repo.finalizeSession(sessionId);
+    emitExamMonitorUpdate(examId);
     return res.json({ done: true, timedOut: true });
   }
 
   const question = exam.questions[session.current_question_index];
   if (!question) {
     await repo.finalizeSession(sessionId);
+    emitExamMonitorUpdate(examId);
     return res.json({ done: true });
   }
 
@@ -154,6 +180,7 @@ sessionsRouter.post('/:id/sessions/:sessionId/answers', async (req, res) => {
   }
   if (isTimedOut(session, exam)) {
     await repo.finalizeSession(sessionId);
+    emitExamMonitorUpdate(examId);
     return res.json({ done: true, timedOut: true });
   }
 
@@ -203,8 +230,10 @@ sessionsRouter.post('/:id/sessions/:sessionId/answers', async (req, res) => {
 
   if (nextIndex >= exam.questions.length) {
     await repo.finalizeSession(sessionId);
+    emitExamMonitorUpdate(examId);
     return res.json({ done: true });
   }
+  emitExamMonitorUpdate(examId);
   res.json({ done: false });
 });
 
@@ -225,6 +254,7 @@ sessionsRouter.post('/:id/sessions/:sessionId/warning', async (req, res) => {
 
   const type = req.body.type === 'window_blur' ? 'window_blur' : 'visibility_hidden';
   const result = await repo.recordWarning(sessionId, type, config.anticheatDebounceMs, config.anticheatMaxWarnings);
+  emitExamMonitorUpdate(examId);
   res.json({ ...result, max_warnings: config.anticheatMaxWarnings });
 });
 
@@ -235,6 +265,83 @@ sessionsRouter.post('/:id/sessions/:sessionId/submit', async (req, res) => {
   if (!session) return;
 
   await repo.finalizeSession(sessionId);
+  emitExamMonitorUpdate(examId);
+  res.json(await repo.getSession(sessionId));
+});
+
+// ---- 교사용: 시험 감독(실시간 모니터링) ----
+
+sessionsRouter.get('/:id/monitor', async (req, res) => {
+  const examId = Number(req.params.id);
+  const exam = await repo.getExamFull(examId);
+  if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
+
+  const students = await repo.getMonitorStudents(examId);
+  res.json({
+    exam: {
+      id: exam.id,
+      title: exam.title,
+      status: exam.status,
+      question_count: exam.questions.length,
+      time_limit_sec: exam.time_limit_sec,
+      started_at: exam.started_at,
+    },
+    students,
+    max_warnings: config.anticheatMaxWarnings,
+  });
+});
+
+sessionsRouter.get('/:id/sessions/:sessionId/monitor', async (req, res) => {
+  const examId = Number(req.params.id);
+  const sessionId = Number(req.params.sessionId);
+  const session = await getSessionOr404(examId, sessionId, res);
+  if (!session) return;
+
+  const exam = await repo.getExamFull(examId);
+  const student = await repo.getRosterEntry(session.roll_number);
+  const history = await repo.getSessionAnswerHistory(sessionId);
+
+  let currentQuestion = null;
+  if (session.status === 'in_progress') {
+    const q = exam.questions[session.current_question_index];
+    if (q) {
+      currentQuestion = {
+        index: session.current_question_index,
+        total: exam.questions.length,
+        type: q.type,
+        prompt: q.prompt,
+        choices: q.choices.map((c) => ({
+          id: c.id,
+          order_index: c.order_index,
+          text: c.text,
+          is_correct: c.is_correct,
+        })),
+      };
+    }
+  }
+
+  res.json({
+    session,
+    student: student ? { roll_number: student.roll_number, name: student.name } : null,
+    currentQuestion,
+    history,
+  });
+});
+
+// 교사가 응시 중(또는 아직 시작 전)인 학생의 시험을 강제로 끝낸다. 이미 끝난 세션은
+// 다시 종료할 수 없으므로 상태를 먼저 확인한다.
+sessionsRouter.post('/:id/sessions/:sessionId/force-submit', async (req, res) => {
+  const examId = Number(req.params.id);
+  const sessionId = Number(req.params.sessionId);
+  const session = await getSessionOr404(examId, sessionId, res);
+  if (!session) return;
+
+  if (session.status !== 'joined' && session.status !== 'in_progress') {
+    return res.status(400).json({ error: '이미 종료된 세션입니다.' });
+  }
+
+  await repo.finalizeSession(sessionId, 'force_submitted');
+  emitExamMonitorUpdate(examId);
   res.json(await repo.getSession(sessionId));
 });
 

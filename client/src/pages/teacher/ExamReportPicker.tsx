@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../../api/client';
-import type { Exam } from '../../types';
+import { api, ApiError } from '../../api/client';
+import type { Exam, Subject } from '../../types';
 import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
 
@@ -14,39 +14,164 @@ const GRADE_LABEL: Record<string, string> = {
 export function ExamReportPicker() {
   const navigate = useNavigate();
   const [exams, setExams] = useState<Exam[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [subjectFilter, setSubjectFilter] = useState<string>('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   useEffect(() => {
     api.get<Exam[]>('/exams').then(setExams);
+    api.get<Subject[]>('/standards/subjects').then(setSubjects);
   }, []);
 
-  return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
-      <h1 className="text-xl font-bold text-ink">시험별 리포트</h1>
+  async function permanentlyDelete(exam: Exam, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (
+      !confirm(
+        `"${exam.title}" 시험을 영구 삭제할까요?\n이 시험에 대한 학생 응시 기록까지 전부 사라지며 되돌릴 수 없습니다.`,
+      )
+    ) {
+      return;
+    }
+    setDeletingId(exam.id);
+    try {
+      await api.delete(`/exams/${exam.id}/permanent`);
+      setExams((prev) => prev.filter((e2) => e2.id !== exam.id));
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : '삭제 중 오류가 발생했습니다.');
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
-      <div className="mt-6 flex flex-col gap-2">
-        {exams.length === 0 && <p className="text-sm text-ink-soft">아직 만든 시험이 없습니다.</p>}
-        {exams.map((exam) => {
-          const finalized = exam.status === 'finalized';
-          return (
-            <Card
-              key={exam.id}
-              className={`flex items-center justify-between ${
-                finalized ? 'cursor-pointer hover:border-accent' : 'opacity-60'
+  const visibleExams = useMemo(() => {
+    return exams.filter((exam) => {
+      if (!showArchived && exam.status === 'archived') return false;
+      if (subjectFilter !== 'all' && exam.subject_id !== subjectFilter) return false;
+      const examDate = exam.created_at.slice(0, 10);
+      if (dateFrom && examDate < dateFrom) return false;
+      if (dateTo && examDate > dateTo) return false;
+      return true;
+    });
+  }, [exams, showArchived, subjectFilter, dateFrom, dateTo]);
+
+  return (
+    <div className="mx-auto max-w-3xl px-6 py-12">
+      <h1 className="animate-fade-in-up text-2xl font-bold tracking-tight text-ink">시험별 리포트</h1>
+
+      {exams.length > 0 && (
+        <div className="animate-fade-in-up mt-5 flex flex-col gap-3">
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              onClick={() => setSubjectFilter('all')}
+              className={`rounded-full px-3 py-1 text-xs font-bold transition-all duration-200 ${
+                subjectFilter === 'all' ? 'bg-accent text-white' : 'bg-surface-container text-ink-soft hover:bg-line'
               }`}
-              onClick={() => finalized && navigate(`/exams/${exam.id}/results`)}
             >
-              <div>
-                <p className="text-sm font-bold text-ink">{exam.title}</p>
-                <p className="mt-0.5 text-xs text-ink-soft">
-                  {GRADE_LABEL[exam.grade_cluster] || exam.grade_cluster} · {exam.subject_id}
-                </p>
-              </div>
-              <Badge tone={finalized ? 'good' : 'neutral'}>
-                {finalized ? '결과 보기' : '확정 후 리포트를 볼 수 있습니다'}
-              </Badge>
-            </Card>
-          );
-        })}
+              전체
+            </button>
+            {subjects.map((s) => (
+              <button
+                key={s.subject_id}
+                onClick={() => setSubjectFilter(s.subject_id)}
+                className={`rounded-full px-3 py-1 text-xs font-bold transition-all duration-200 ${
+                  subjectFilter === s.subject_id
+                    ? 'bg-accent text-white'
+                    : 'bg-surface-container text-ink-soft hover:bg-line'
+                }`}
+              >
+                {s.subject_name}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-bold text-ink-soft">기간</span>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="rounded-lg border border-line bg-panel px-2 py-1 text-ink outline-none focus:border-accent"
+            />
+            <span className="text-ink-soft">~</span>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="rounded-lg border border-line bg-panel px-2 py-1 text-ink outline-none focus:border-accent"
+            />
+            {(dateFrom || dateTo) && (
+              <button
+                className="font-bold text-accent hover:underline"
+                onClick={() => {
+                  setDateFrom('');
+                  setDateTo('');
+                }}
+              >
+                초기화
+              </button>
+            )}
+
+            <label className="ml-auto flex items-center gap-1.5 font-bold text-ink-soft">
+              <input
+                type="checkbox"
+                checked={showArchived}
+                onChange={(e) => setShowArchived(e.target.checked)}
+              />
+              삭제된 시험도 표시
+            </label>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-col gap-2">
+        {exams.length === 0 ? (
+          <p className="text-sm text-ink-soft">아직 만든 시험이 없습니다.</p>
+        ) : visibleExams.length === 0 ? (
+          <p className="text-sm text-ink-soft">조건에 맞는 시험이 없습니다.</p>
+        ) : (
+          visibleExams.map((exam, i) => {
+            // 삭제(보관 처리)된 시험도 한때 확정되어 결과가 쌓였다면 계속 리포트를 볼 수 있어야 한다.
+            const viewable = exam.status === 'finalized' || exam.status === 'archived';
+            return (
+              <Card
+                key={exam.id}
+                className={`animate-fade-in-up flex items-center justify-between gap-3 transition-all duration-200 ${
+                  viewable
+                    ? 'cursor-pointer hover:-translate-y-0.5 hover:border-accent/60 hover:shadow-[0_4px_12px_rgba(16,24,40,0.08)]'
+                    : 'opacity-60'
+                }`}
+                style={{ animationDelay: `${Math.min(i, 12) * 25}ms` }}
+                onClick={() => viewable && navigate(`/exams/${exam.id}/results`)}
+              >
+                <div className="min-w-0">
+                  <p className="flex items-center gap-1.5 text-sm font-bold text-ink">
+                    <span className="truncate">{exam.title}</span>
+                    {exam.status === 'archived' && <Badge tone="neutral">삭제됨</Badge>}
+                  </p>
+                  <p className="mt-0.5 text-xs text-ink-soft">
+                    {GRADE_LABEL[exam.grade_cluster] || exam.grade_cluster} · {exam.subject_id} ·{' '}
+                    {exam.created_at.slice(0, 10)}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Badge tone={viewable ? 'good' : 'neutral'}>
+                    {viewable ? '결과 보기' : '확정 후 리포트를 볼 수 있습니다'}
+                  </Badge>
+                  <button
+                    className="text-xs font-bold text-ink-soft hover:text-danger disabled:opacity-50"
+                    disabled={deletingId === exam.id}
+                    onClick={(e) => permanentlyDelete(exam, e)}
+                  >
+                    영구 삭제
+                  </button>
+                </div>
+              </Card>
+            );
+          })
+        )}
       </div>
     </div>
   );

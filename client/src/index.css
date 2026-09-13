@@ -23,3 +23,45 @@ body {
   font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', 'Segoe UI', sans-serif;
   line-height: 1.55;
 }
+
+/* Material Design 3의 "emphasized decelerate" 곡선을 기준으로 한 진입 애니메이션.
+   목록/카드가 한 번에 뚝 나타나지 않고 살짝 떠오르며 들어오도록 한다. */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-in-up {
+  animation: fade-in-up 0.4s cubic-bezier(0.05, 0.7, 0.1, 1) both;
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.animate-scale-in {
+  animation: scale-in 0.22s cubic-bezier(0.05, 0.7, 0.1, 1) both;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-overlay-in {
+  animation: overlay-in 0.18s ease-out both;
+}

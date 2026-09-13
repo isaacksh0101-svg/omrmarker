@@ -3,8 +3,10 @@ import { Dashboard } from './pages/teacher/Dashboard'
 import { ExamBuilder } from './pages/teacher/exam-builder/ExamBuilder'
 import { ExamResults } from './pages/teacher/ExamResults'
 import { ExamReportPicker } from './pages/teacher/ExamReportPicker'
+import { ExamMonitorPicker } from './pages/teacher/ExamMonitorPicker'
+import { ExamMonitor } from './pages/teacher/ExamMonitor'
 import { StandardsReport } from './pages/teacher/StandardsReport'
-import { BackupPage } from './pages/teacher/BackupPage'
+import { SettingsPage } from './pages/teacher/SettingsPage'
 import { RosterPage } from './pages/roster/RosterPage'
 import { StudentJoin } from './pages/student/StudentJoin'
 import { TakeExam } from './pages/student/TakeExam'
@@ -18,9 +20,11 @@ function App() {
         <Route path="/exams/:id" element={<TeacherLayout><ExamBuilder /></TeacherLayout>} />
         <Route path="/exams/:id/results" element={<TeacherLayout><ExamResults /></TeacherLayout>} />
         <Route path="/roster" element={<TeacherLayout><RosterPage /></TeacherLayout>} />
+        <Route path="/exam-monitor" element={<TeacherLayout><ExamMonitorPicker /></TeacherLayout>} />
+        <Route path="/exam-monitor/:id" element={<TeacherLayout><ExamMonitor /></TeacherLayout>} />
         <Route path="/standards-report" element={<TeacherLayout><StandardsReport /></TeacherLayout>} />
         <Route path="/exam-reports" element={<TeacherLayout><ExamReportPicker /></TeacherLayout>} />
-        <Route path="/backup" element={<TeacherLayout><BackupPage /></TeacherLayout>} />
+        <Route path="/settings" element={<TeacherLayout><SettingsPage /></TeacherLayout>} />
         <Route path="/student" element={<StudentJoin />} />
         <Route path="/student/exam/:examId" element={<TakeExam />} />
       </Routes>

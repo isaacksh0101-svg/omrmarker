@@ -138,10 +138,10 @@ export function RosterPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-10">
-      <h1 className="text-xl font-bold text-ink">학생 관리</h1>
+    <div className="mx-auto max-w-2xl px-6 py-12">
+      <h1 className="animate-fade-in-up text-2xl font-bold tracking-tight text-ink">학생 관리</h1>
 
-      <Card className="mt-6">
+      <Card className="animate-fade-in-up mt-7">
         <h2 className="text-sm font-bold text-ink">학생 추가</h2>
         <div className="mt-3 flex items-end gap-2">
           <label className="flex flex-col gap-1">
@@ -212,12 +212,12 @@ export function RosterPage() {
         </div>
       </Card>
 
-      <div className="mt-8">
+      <div className="animate-fade-in-up mt-9" style={{ animationDelay: '60ms' }}>
         <h2 className="text-sm font-bold text-ink">등록된 학생 ({roster.length}명)</h2>
         {roster.length === 0 ? (
           <p className="mt-3 text-sm text-ink-soft">아직 등록된 학생이 없습니다.</p>
         ) : (
-          <Card className="mt-3 p-0">
+          <Card className="mt-3 overflow-hidden p-0">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-line text-left text-xs font-bold text-ink-soft">

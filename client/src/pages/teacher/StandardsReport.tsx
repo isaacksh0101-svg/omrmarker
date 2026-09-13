@@ -56,7 +56,7 @@ export function StandardsReport() {
   function exportExcel() {
     const who = rollNumber ? `${rollNumber}번` : '전체';
     const subjectSuffix = subjectFilter ? `_${subjectFilter}` : '';
-    downloadWorkbook(`성취기준별_리포트_${who}${subjectSuffix}.xlsx`, [
+    downloadWorkbook(`학생별_리포트_${who}${subjectSuffix}.xlsx`, [
       {
         name: '성취기준별 정답률',
         rows: filteredData.map((s) => ({
@@ -73,9 +73,9 @@ export function StandardsReport() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
-      <div className="flex items-center gap-2">
-        <h1 className="text-xl font-bold text-ink">성취기준별 리포트</h1>
+    <div className="mx-auto max-w-3xl px-6 py-12">
+      <div className="animate-fade-in-up flex items-center gap-2">
+        <h1 className="text-2xl font-bold tracking-tight text-ink">학생별 리포트</h1>
         {filteredData.length > 0 && (
           <button className="ml-auto text-xs font-bold text-accent hover:underline" onClick={exportExcel}>
             엑셀로 다운로드
@@ -84,7 +84,7 @@ export function StandardsReport() {
       </div>
 
       {subjects.length > 1 && (
-        <div className="mt-4 flex flex-wrap gap-1 rounded-full bg-bg p-1">
+        <div className="animate-fade-in-up mt-4 flex flex-wrap gap-1 rounded-full bg-bg p-1">
           <button
             className={`rounded-full px-3 py-1.5 text-sm font-bold transition-colors duration-150 ${
               subjectFilter === null ? 'bg-panel text-ink shadow-sm' : 'text-ink-soft'
@@ -160,7 +160,7 @@ export function StandardsReport() {
         </button>
       </div>
 
-      <div className="mt-4">
+      <div className="animate-fade-in-up mt-4" style={{ animationDelay: '40ms' }}>
         <StatCardRow>
           <StatCard label="집계된 성취기준 수" value={`${filteredData.length}개`} />
           <StatCard label="누적 푼 문제 수" value={`${totalAttempted}문제`} />
@@ -174,8 +174,12 @@ export function StandardsReport() {
           여기에 정답률이 집계됩니다.
         </p>
       ) : (
-        grouped.map(([subjectName, items]) => (
-          <Card key={subjectName} className="mt-4">
+        grouped.map(([subjectName, items], i) => (
+          <Card
+            key={subjectName}
+            className="animate-fade-in-up mt-4"
+            style={{ animationDelay: `${80 + Math.min(i, 10) * 30}ms` }}
+          >
             <h2 className="text-sm font-bold text-ink">{subjectName}</h2>
             <div className="mt-2 divide-y divide-line">
               {items.map((s) => (

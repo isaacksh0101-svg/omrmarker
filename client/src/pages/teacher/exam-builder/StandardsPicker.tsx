@@ -33,9 +33,7 @@ export function StandardsPicker({ options, selectedCodes, onChange, required }: 
   return (
     <div>
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-xs font-bold text-ink-soft">
-          성취기준 {required ? '(AI 문항 필수)' : '(선택)'}
-        </span>
+        <span className="text-xs font-bold text-ink-soft">성취기준{required ? ' (AI 문항 필수)' : ''}</span>
         {selected.map((s) => (
           <span
             key={s.code}

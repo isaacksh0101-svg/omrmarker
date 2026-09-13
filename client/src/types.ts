@@ -170,9 +170,70 @@ export interface ExamResultsData {
   standardsAccuracy: StandardAccuracy[];
 }
 
+export interface MonitorStudent {
+  roll_number: number;
+  name: string | null;
+  session_id: number | null;
+  status: SessionStatus | null;
+  current_question_index: number | null;
+  warning_count: number | null;
+  started_at: string | null;
+  submitted_at: string | null;
+  score: number | null;
+  max_score: number | null;
+}
+
+export interface ExamMonitorData {
+  exam: {
+    id: number;
+    title: string;
+    status: ExamStatus;
+    question_count: number;
+    time_limit_sec: number;
+    started_at: string | null;
+  };
+  students: MonitorStudent[];
+  max_warnings: number;
+}
+
+export interface MonitorCurrentQuestion {
+  index: number;
+  total: number;
+  type: QuestionType;
+  prompt: string;
+  choices: { id: number; order_index: number; text: string; is_correct: boolean }[];
+}
+
+export interface MonitorHistoryItem {
+  order_index: number;
+  type: QuestionType;
+  prompt: string;
+  selected_choice_id: number | null;
+  selected_choice_text: string | null;
+  short_answer_text: string | null;
+  is_correct: number | null;
+  awarded_points: number | null;
+  time_spent_ms: number | null;
+  answered_at: string | null;
+}
+
+export interface SessionMonitorDetail {
+  session: ExamSession;
+  student: { roll_number: number; name: string | null } | null;
+  currentQuestion: MonitorCurrentQuestion | null;
+  history: MonitorHistoryItem[];
+}
+
+export interface LanIpCandidate {
+  name: string;
+  address: string;
+}
+
 export interface LanInfo {
   url: string;
   studentUrl: string;
   qr: string | null;
   servingClient: boolean;
+  candidates: LanIpCandidate[];
+  selectedIp: string;
 }

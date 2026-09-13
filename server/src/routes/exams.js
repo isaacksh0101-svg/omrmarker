@@ -49,8 +49,25 @@ examsRouter.put('/:id', async (req, res) => {
   res.json(await repo.getExamFull(id));
 });
 
+// 시험지 삭제: 실제로는 보관(archived) 처리만 해서 목록에서 감추고, 이미 쌓인 학생
+// 응시 결과(exam_sessions/answers)는 그대로 남겨 시험별 리포트에서 계속 볼 수 있게 한다.
 examsRouter.delete('/:id', async (req, res) => {
-  await repo.deleteExam(Number(req.params.id));
+  const id = Number(req.params.id);
+  const exam = await repo.getExam(id);
+  if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
+
+  await repo.archiveExam(id);
+  res.status(204).end();
+});
+
+// 시험별 리포트 화면에서 쓰는 진짜 영구 삭제. 응시 기록까지 전부 사라지므로 되돌릴 수
+// 없다 - 테스트/오입력 등으로 남은 필요 없는 시험을 완전히 치울 때만 쓴다.
+examsRouter.delete('/:id/permanent', async (req, res) => {
+  const id = Number(req.params.id);
+  const exam = await repo.getExam(id);
+  if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
+
+  await repo.hardDeleteExam(id);
   res.status(204).end();
 });
 

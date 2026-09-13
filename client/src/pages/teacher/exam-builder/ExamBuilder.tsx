@@ -77,9 +77,9 @@ export function ExamBuilder() {
   const missingByQuestion = new Map((missing ?? []).map((m) => [m.question_id, m.reasons]));
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-10 pb-24">
-      <div className="flex items-center gap-2">
-        <h1 className="text-xl font-bold text-ink">{exam.title}</h1>
+    <div className="mx-auto max-w-3xl px-6 py-12 pb-24">
+      <div className="animate-fade-in-up flex items-center gap-2">
+        <h1 className="text-2xl font-bold tracking-tight text-ink">{exam.title}</h1>
         <Badge tone={exam.status === 'finalized' ? 'good' : 'neutral'}>
           {exam.status === 'finalized' ? '확정됨' : '작성 중'}
         </Badge>
@@ -178,15 +178,19 @@ export function ExamBuilder() {
       )}
 
       <Card className="mt-8">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-bold text-ink">시험 확정</h2>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0 sm:pr-4">
+            <h2 className="text-sm font-bold text-ink">시험지 만들기</h2>
             <p className="mt-1 text-xs text-ink-soft">
               모든 문항에 정답이 설정되어야 확정할 수 있습니다. 성취기준 태깅은 선택이지만, AI로
-              불러온 문항은 태깅이 필수입니다.
+              불러온 문항은 AI가 저절로 태깅합니다.
             </p>
           </div>
-          <Button onClick={finalize} disabled={finalizing || (exam.questions ?? []).length === 0}>
+          <Button
+            className="shrink-0 whitespace-nowrap"
+            onClick={finalize}
+            disabled={finalizing || (exam.questions ?? []).length === 0}
+          >
             확정하기
           </Button>
         </div>

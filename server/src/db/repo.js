@@ -64,12 +64,21 @@ export async function updateExam(id, { title, subject_id, grade_cluster, time_li
     .run(title, subject_id, grade_cluster, time_limit_sec, mode, now(), id);
 }
 
-export async function deleteExam(id) {
-  await db.prepare('DELETE FROM exams WHERE id = ?').run(id);
+// 시험지를 실제로 지우면 exam_sessions/answers까지 함께 사라져(FK ON DELETE CASCADE)
+// 학생 응시 결과가 통째로 없어진다. "삭제"는 목록/감독 화면에서만 숨기는 보관 처리로
+// 구현해 결과는 시험별 리포트에서 계속 조회할 수 있게 한다.
+export async function archiveExam(id) {
+  await db.prepare("UPDATE exams SET status = 'archived', updated_at = ? WHERE id = ?").run(now(), id);
 }
 
 export async function finalizeExam(id) {
   await db.prepare("UPDATE exams SET status = 'finalized', updated_at = ? WHERE id = ?").run(now(), id);
+}
+
+// 시험별 리포트 화면에서 쓰는 진짜 영구 삭제. exam_sessions/answers까지 FK로 함께
+// 지워지므로(ON DELETE CASCADE) 되돌릴 수 없다 - archiveExam(목록에서만 숨김)과는 다르다.
+export async function hardDeleteExam(id) {
+  await db.prepare('DELETE FROM exams WHERE id = ?').run(id);
 }
 
 // ---- questions ----
@@ -267,6 +276,38 @@ export async function startSession(sessionId) {
     .run(now(), sessionId);
 }
 
+// 교사가 '시험 감독' 화면에서 시험을 시작한 시각. 이미 시작된 시험이면 그대로 둔다
+// (COALESCE) - 다시 눌러도 이미 응시 중인 학생들의 제한시간이 리셋되지 않는다.
+export async function markExamStarted(examId) {
+  await db
+    .prepare("UPDATE exams SET started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?")
+    .run(now(), now(), examId);
+}
+
+// 아직 대기 중(joined)인 학생 전원을 한 번에 응시 상태로 바꾼다. 새로 입장하는 학생은
+// 이 함수를 부르지 않아도 sessions.js의 join 라우트가 exam.started_at을 보고 즉시 시작시킨다.
+export async function startAllJoinedSessions(examId) {
+  const rows = await db
+    .prepare("SELECT id FROM exam_sessions WHERE exam_id = ? AND status = 'joined'")
+    .all(examId);
+  for (const row of rows) {
+    await startSession(row.id);
+  }
+  return rows.length;
+}
+
+// 교사가 '시험 감독' 화면에서 시험 전체를 지금 끝낸다. 아직 대기/응시 중인 학생 전원을
+// 지금까지 낸 답만으로 강제 제출 처리한다.
+export async function endAllActiveSessions(examId) {
+  const rows = await db
+    .prepare("SELECT id FROM exam_sessions WHERE exam_id = ? AND status IN ('joined', 'in_progress')")
+    .all(examId);
+  for (const row of rows) {
+    await finalizeSession(row.id, 'force_submitted');
+  }
+  return rows.length;
+}
+
 export async function getSessionAnswerSummary(sessionId) {
   return db
     .prepare(
@@ -355,6 +396,38 @@ export async function finalizeSession(sessionId, status = 'submitted') {
   await db
     .prepare('UPDATE exam_sessions SET status = ?, submitted_at = ?, score = ?, max_score = ? WHERE id = ?')
     .run(status, now(), totals.score, totals.max_score, sessionId);
+}
+
+// ---- 교사용 시험 감독(실시간 모니터링) ----
+
+// 명단에 있는 학생 전원을 기준으로, 이 시험에 아직 입장하지 않은 학생도 함께 보여준다
+// (교사가 "누가 아직 안 들어왔는지"를 바로 확인할 수 있어야 하므로 LEFT JOIN).
+export async function getMonitorStudents(examId) {
+  return db
+    .prepare(
+      `SELECT r.roll_number, r.name, es.id AS session_id, es.status,
+              es.current_question_index, es.warning_count, es.started_at, es.submitted_at,
+              es.score, es.max_score
+       FROM roster r
+       LEFT JOIN exam_sessions es ON es.roll_number = r.roll_number AND es.exam_id = ?
+       ORDER BY r.roll_number`,
+    )
+    .all(examId);
+}
+
+// 학생이 지금까지 답한 문항 이력(문제 내용 포함) - 감독 화면에서 "화면 확인"용.
+export async function getSessionAnswerHistory(sessionId) {
+  return db
+    .prepare(
+      `SELECT q.order_index, q.type, q.prompt, a.selected_choice_id, c.text AS selected_choice_text,
+              a.short_answer_text, a.is_correct, a.awarded_points, a.time_spent_ms, a.answered_at
+       FROM answers a
+       JOIN questions q ON q.id = a.question_id
+       LEFT JOIN choices c ON c.id = a.selected_choice_id
+       WHERE a.session_id = ? AND a.answered_at IS NOT NULL
+       ORDER BY q.order_index`,
+    )
+    .all(sessionId);
 }
 
 // ---- 교사용 결과 집계 ----
