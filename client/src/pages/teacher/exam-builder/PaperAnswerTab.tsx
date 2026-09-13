@@ -42,7 +42,9 @@ function PaperAnswerRow({ examId, question, index, standardOptions, missingReaso
       <div className="flex items-center gap-2">
         <span className="text-sm font-bold text-ink-soft">{index + 1}.</span>
         <Badge tone="neutral">{question.type === 'mc' ? `객관식(${question.choices.length}지선다)` : '단답형'}</Badge>
+        {question.ai_suggested && <Badge tone="warn">AI 추출 - 확인 필요</Badge>}
       </div>
+      {question.prompt && <p className="mt-1.5 text-xs text-ink-soft">{question.prompt}</p>}
 
       <div className="mt-2">
         {question.type === 'mc' ? (

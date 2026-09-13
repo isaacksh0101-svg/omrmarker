@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../../../api/client';
 import type { Question } from '../../../types';
+import { Badge } from '../../../components/Badge';
 import { Button } from '../../../components/Button';
 import { IconGrip } from '../../../components/icons';
+import { AiUploadPanel } from './AiUploadPanel';
 
 interface Props {
   examId: number;
@@ -77,7 +79,10 @@ export function PaperBuildTab({ examId, questions, onChanged }: Props) {
 
   return (
     <div>
-      <div className="flex flex-wrap items-end gap-3">
+      <AiUploadPanel examId={examId} onExtracted={onChanged} />
+
+      <p className="mt-5 text-xs font-bold text-ink-soft">또는 문항 수를 직접 입력해서 틀만 만들기</p>
+      <div className="mt-2 flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1">
           <span className="text-xs font-bold text-ink-soft">객관식 4지선다 수</span>
           <input
@@ -130,6 +135,7 @@ export function PaperBuildTab({ examId, questions, onChanged }: Props) {
               <IconGrip className="h-5 w-5 shrink-0 cursor-grab text-ink-soft" />
               <span className="w-8 shrink-0 text-sm font-bold text-ink-soft">{i + 1}.</span>
               <span className="flex-1 text-sm text-ink">{typeLabel(q)}</span>
+              {q.ai_suggested && <Badge tone="warn">AI 추출 - 확인 필요</Badge>}
               <button
                 className="text-xs text-ink-soft hover:text-danger"
                 onClick={() => deleteQuestion(id)}

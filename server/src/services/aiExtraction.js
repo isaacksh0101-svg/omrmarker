@@ -15,14 +15,23 @@ function buildResponseSchema(allowedCodes) {
           properties: {
             order_index: { type: 'INTEGER' },
             type: { type: 'STRING', enum: ['mc', 'short'] },
-            prompt: { type: 'STRING' },
+            prompt: {
+              type: 'STRING',
+              description:
+                '문제 지시문과 본문만. 객관식이면 보기 내용(㉠㉡㉢, ①②③④⑤ 뒤에 오는 값/식)은 여기 반복해서 적지 않고 choices에만 적는다.',
+            },
             choices: {
               type: 'ARRAY',
+              description: '객관식일 때만 채운다. 각 보기의 기호와 실제 내용을 함께 담는다.',
               items: {
                 type: 'OBJECT',
                 properties: {
                   order_index: { type: 'INTEGER' },
-                  text: { type: 'STRING' },
+                  text: {
+                    type: 'STRING',
+                    description:
+                      '이 보기의 기호(㉠, ①, 가 등)와 그 뒤에 오는 실제 내용(분수식·계산식 포함)을 전부 담는다. 기호만 담고 끝내지 않는다. 예: "① 15/8 ÷ 5/24".',
+                  },
                 },
                 required: ['order_index', 'text'],
               },
@@ -52,9 +61,12 @@ function buildPrompt(gradeLabel, subjectName) {
   return `당신은 초등학교 ${gradeLabel} ${subjectName} 시험지 이미지를 분석하는 보조 도구입니다.
 
 이미지에 있는 문항들을 순서대로 추출하세요. 각 문항에 대해:
-1. 문제 내용(prompt)을 이미지에 보이는 그대로 옮겨 적으세요.
+1. 문제 내용(prompt)을 이미지에 보이는 그대로 옮겨 적으세요. **단, 객관식이면 보기 내용은 prompt에 넣지 않습니다** (아래 3번 참고).
 2. 유형(type)을 판단하세요: 보기 중에서 고르는 문제는 "mc", 직접 답을 쓰는 문제는 "short".
-3. 객관식(mc)이면 보기(choices)를 순서대로 모두 옮겨 적으세요.
+3. 객관식(mc)이면 보기(choices)를 순서대로 모두 옮겨 적으세요. **각 보기의 text에는 기호(㉠, ①, 가 등)와 그
+   뒤에 오는 실제 내용을 반드시 함께 담으세요.** 보기 내용이 분수식·계산식이라 복잡해 보여도 기호만 담고
+   끝내지 마세요. 예를 들어 이미지에 "① 15/8 ÷ 5/24"라고 쓰여 있으면 choices의 text는 "① 15/8 ÷ 5/24"
+   전체여야 하며, "①"만 담고 실제 식은 prompt 쪽에 남겨두면 안 됩니다.
 4. 이 문항이 어떤 성취기준과 관련 있는지 제공된 성취기준 목록 중에서만 골라 suggested_standards에 담으세요.
    확신 정도를 confidence(high/medium/low)로, 왜 그렇게 판단했는지 rationale에 간단히 적으세요.
    목록에 없는 코드는 절대 만들어내지 마세요.
