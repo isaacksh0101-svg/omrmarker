@@ -1,15 +1,17 @@
 @import "tailwindcss";
 
 @theme {
-  /* 토스 앱 스타일 팔레트: 단일 블루 강조색 */
-  --color-bg: #f5f6f8;
+  /* Material Design 3 톤 체계로 다듬은 단일 블루 강조색 팔레트 */
+  --color-bg: #f6f7fb;
   --color-panel: #ffffff;
-  --color-ink: #1f2430;
-  --color-ink-soft: #5b6270;
-  --color-line: #e2e5ea;
-  --color-accent: #3182f6;
-  --color-accent-soft: #eaf1ff;
-  --color-accent-ink: #14418f;
+  --color-surface-container: #eef0f7;
+  --color-ink: #1b1c22;
+  --color-ink-soft: #5c5f6d;
+  --color-line: #e1e3ec;
+  --color-outline: #eceef5;
+  --color-accent: #3258ce;
+  --color-accent-soft: #e2e8fb;
+  --color-accent-ink: #1c3a94;
   --color-good: #12b76a;
   --color-warn: #f79009;
   --color-danger: #f04438;

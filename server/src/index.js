@@ -3,6 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import express from 'express';
 import cors from 'cors';
+import QRCode from 'qrcode';
 import { Server as SocketIOServer } from 'socket.io';
 
 import { config } from './config.js';
@@ -10,6 +11,7 @@ import { getLanIp } from './lib/lanIp.js';
 import './db/index.js'; // DB 연결 + 스키마 초기화 (부작용으로 초기화됨)
 import { examsRouter } from './routes/exams.js';
 import { aiRouter } from './routes/ai.js';
+import { sessionsRouter } from './routes/sessions.js';
 import { standardsRouter } from './routes/standards.js';
 import { rosterRouter } from './routes/roster.js';
 
@@ -23,12 +25,19 @@ app.get('/api/health', (_req, res) => {
 
 app.use('/api/exams', examsRouter);
 app.use('/api/exams', aiRouter);
+app.use('/api/exams', sessionsRouter);
 app.use('/api/standards', standardsRouter);
 app.use('/api/roster', rosterRouter);
 
-app.get('/api/lan-info', (_req, res) => {
+app.get('/api/lan-info', async (_req, res) => {
   const ip = getLanIp();
-  res.json({ ip, port: config.port, url: `http://${ip}:${config.port}` });
+  const url = `http://${ip}:${config.port}`;
+  const studentUrl = `${url}/student`;
+  // client/dist가 없으면(=npm run dev로 개발 서버만 켜둔 상태) 이 포트는 API만 응답하고
+  // /student 같은 화면 경로는 서빙하지 않는다. QR은 그대로 보여주되 화면에서 경고해야 한다.
+  const servingClient = fs.existsSync(config.clientDistDir);
+  const qr = await QRCode.toDataURL(studentUrl).catch(() => null);
+  res.json({ ip, port: config.port, url, studentUrl, qr, servingClient });
 });
 
 // 프로덕션 실행: 빌드된 클라이언트 정적 파일을 같은 포트에서 서빙한다.

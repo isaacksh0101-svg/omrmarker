@@ -1,0 +1,131 @@
+import { useEffect, useMemo, useState } from 'react';
+import { api } from '../../api/client';
+import type { RosterEntry, StandardAccuracy } from '../../types';
+import { Card } from '../../components/Card';
+import { AccuracyRow } from '../../components/AccuracyRow';
+import { StatCard, StatCardRow } from '../../components/StatCard';
+
+export function StandardsReport() {
+  const [roster, setRoster] = useState<RosterEntry[]>([]);
+  const [rollNumber, setRollNumber] = useState<string>('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [data, setData] = useState<StandardAccuracy[]>([]);
+  const [sortLowFirst, setSortLowFirst] = useState(false);
+
+  useEffect(() => {
+    api.get<RosterEntry[]>('/roster').then(setRoster);
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (rollNumber) params.set('roll_number', rollNumber);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    api.get<StandardAccuracy[]>(`/standards/report${query}`).then(setData);
+  }, [rollNumber, from, to]);
+
+  const totalAttempted = data.reduce((sum, s) => sum + s.attempted_count, 0);
+  const totalCorrect = data.reduce((sum, s) => sum + s.correct_count, 0);
+  const overallPct = totalAttempted > 0 ? Math.round((totalCorrect / totalAttempted) * 100) : 0;
+
+  const grouped = useMemo(() => {
+    const sorted = [...data].sort((a, b) => (sortLowFirst ? a.accuracy - b.accuracy : b.attempted_count - a.attempted_count));
+    const bySubject = new Map<string, StandardAccuracy[]>();
+    for (const s of sorted) {
+      const list = bySubject.get(s.subject_name) ?? [];
+      list.push(s);
+      bySubject.set(s.subject_name, list);
+    }
+    return [...bySubject.entries()];
+  }, [data, sortLowFirst]);
+
+  return (
+    <div className="mx-auto max-w-3xl px-6 py-10">
+      <h1 className="text-xl font-bold text-ink">성취기준별 리포트</h1>
+
+      <div className="mt-4 flex flex-wrap items-end gap-2">
+        <label className="flex items-center gap-2">
+          <span className="text-xs font-bold text-ink-soft">학생</span>
+          <select
+            className="rounded-xl border border-line bg-panel px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+            value={rollNumber}
+            onChange={(e) => setRollNumber(e.target.value)}
+          >
+            <option value="">전체</option>
+            {roster.map((r) => (
+              <option key={r.roll_number} value={r.roll_number}>
+                {r.roll_number}번{r.name ? ` · ${r.name}` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2">
+          <span className="text-xs font-bold text-ink-soft">시작일</span>
+          <input
+            type="date"
+            className="rounded-xl border border-line bg-panel px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+          />
+        </label>
+        <label className="flex items-center gap-2">
+          <span className="text-xs font-bold text-ink-soft">종료일</span>
+          <input
+            type="date"
+            className="rounded-xl border border-line bg-panel px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+          />
+        </label>
+        {(from || to) && (
+          <button
+            className="text-xs font-bold text-ink-soft hover:text-accent"
+            onClick={() => {
+              setFrom('');
+              setTo('');
+            }}
+          >
+            기간 초기화
+          </button>
+        )}
+        <button
+          className="ml-auto text-xs font-bold text-ink-soft hover:text-accent"
+          onClick={() => setSortLowFirst((v) => !v)}
+        >
+          {sortLowFirst ? '푼 문제 수순으로 보기' : '정답률 낮은 순으로 보기'}
+        </button>
+      </div>
+
+      <div className="mt-4">
+        <StatCardRow>
+          <StatCard label="집계된 성취기준 수" value={`${data.length}개`} />
+          <StatCard label="누적 푼 문제 수" value={`${totalAttempted}문제`} />
+          <StatCard label="누적 정답률" value={`${overallPct}%`} />
+        </StatCardRow>
+      </div>
+
+      {grouped.length === 0 ? (
+        <p className="mt-8 text-sm text-ink-soft">아직 제출된 응답이 없습니다.</p>
+      ) : (
+        grouped.map(([subjectName, items]) => (
+          <Card key={subjectName} className="mt-4">
+            <h2 className="text-sm font-bold text-ink">{subjectName}</h2>
+            <div className="mt-2 divide-y divide-line">
+              {items.map((s) => (
+                <AccuracyRow
+                  key={s.code}
+                  label={`[${s.code}]`}
+                  sublabel={s.statement}
+                  correct={s.correct_count}
+                  total={s.attempted_count}
+                />
+              ))}
+            </div>
+          </Card>
+        ))
+      )}
+    </div>
+  );
+}

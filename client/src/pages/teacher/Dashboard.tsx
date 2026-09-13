@@ -58,8 +58,7 @@ export function Dashboard() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-10">
-      <h1 className="text-xl font-bold text-ink">OMR프로그램</h1>
-      <p className="mt-1 text-sm text-ink-soft">시험을 만들고, 채점하고, 성취기준별로 분석합니다.</p>
+      <h1 className="text-xl font-bold text-ink">시험지 관리</h1>
 
       <Card className="mt-6">
         <h2 className="text-sm font-bold text-ink">새 시험 만들기</h2>
@@ -166,7 +165,20 @@ export function Dashboard() {
                     {exam.mode === 'paper_marking' ? '종이+마킹' : '온라인'}
                   </p>
                 </div>
-                <Badge tone={STATUS_BADGE[exam.status].tone}>{STATUS_BADGE[exam.status].label}</Badge>
+                <div className="flex items-center gap-2">
+                  {exam.status === 'finalized' && (
+                    <button
+                      className="text-xs font-bold text-accent hover:underline"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/exams/${exam.id}/results`);
+                      }}
+                    >
+                      결과 보기
+                    </button>
+                  )}
+                  <Badge tone={STATUS_BADGE[exam.status].tone}>{STATUS_BADGE[exam.status].label}</Badge>
+                </div>
               </Card>
             ))}
           </div>

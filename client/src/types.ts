@@ -65,3 +65,107 @@ export interface FinalizeMissing {
   order_index: number;
   reasons: string[];
 }
+
+export type SessionStatus = 'joined' | 'in_progress' | 'submitted' | 'force_submitted' | 'disqualified';
+
+export interface ExamSession {
+  id: number;
+  exam_id: number;
+  roll_number: number;
+  status: SessionStatus;
+  started_at: string | null;
+  submitted_at: string | null;
+  warning_count: number;
+  score: number | null;
+  max_score: number | null;
+  current_question_index: number;
+  answers?: { order_index: number; is_correct: number; awarded_points: number }[];
+}
+
+export interface PublicExam {
+  id: number;
+  title: string;
+  subject_id: string;
+  grade_cluster: string;
+  time_limit_sec: number;
+  mode: ExamMode;
+  question_count: number;
+}
+
+export interface PublicChoice {
+  id: number;
+  order_index: number;
+  text: string;
+}
+
+export interface PublicQuestion {
+  id: number;
+  order_index: number;
+  type: QuestionType;
+  prompt: string;
+  points: number;
+  choices: PublicChoice[];
+}
+
+export interface CurrentQuestionResponse {
+  done: boolean;
+  timedOut?: boolean;
+  index?: number;
+  total?: number;
+  question?: PublicQuestion;
+}
+
+export interface RosterEntry {
+  id: number;
+  roll_number: number;
+  name: string | null;
+}
+
+export interface QuestionStat {
+  question_id: number;
+  order_index: number;
+  prompt: string;
+  answered_count: number;
+  correct_count: number;
+  avg_time_spent_ms: number | null;
+}
+
+export interface StandardAccuracy {
+  code: string;
+  statement: string;
+  subject_id: string;
+  subject_name: string;
+  grade_cluster: string;
+  attempted_count: number;
+  correct_count: number;
+  accuracy: number;
+}
+
+export interface ExamResultSession {
+  roll_number: number;
+  name: string | null;
+  status: SessionStatus;
+  score: number | null;
+  max_score: number | null;
+  submitted_at: string | null;
+  total_time_ms: number;
+  isOutlier: boolean;
+  outlierReasons: string[];
+}
+
+export interface ExamResultsData {
+  sessions: ExamResultSession[];
+  questionStats: QuestionStat[];
+  slowestQuestions: QuestionStat[];
+  lowestAccuracyQuestions: QuestionStat[];
+  standardsAccuracy: StandardAccuracy[];
+}
+
+export interface LanInfo {
+  ip: string;
+  port: number;
+  url: string;
+  studentUrl: string;
+  qr: string | null;
+  servingClient: boolean;
+}

@@ -117,6 +117,76 @@ examsRouter.post('/:id/questions', (req, res) => {
   res.status(201).json(getExamFull(examId).questions.find((q) => q.id === result.lastInsertRowid));
 });
 
+const CIRCLED_DIGITS = ['①', '②', '③', '④', '⑤', '⑥'];
+
+// 종이 시험지 "틀 만들기": 객관식(4/5지선다)·단답형 개수만 받아 한 번에 문항을 생성한다.
+// 정답은 아직 정하지 않는다 - 이후 "정답 입력" 단계에서 채운다.
+examsRouter.post('/:id/questions/batch', (req, res) => {
+  const examId = Number(req.params.id);
+  const exam = getExamRow(examId);
+  if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
+
+  const mc4 = Number.isInteger(req.body.mc4) ? req.body.mc4 : 0;
+  const mc5 = Number.isInteger(req.body.mc5) ? req.body.mc5 : 0;
+  const short = Number.isInteger(req.body.short) ? req.body.short : 0;
+  if (mc4 < 0 || mc5 < 0 || short < 0 || mc4 + mc5 + short === 0) {
+    return res.status(400).json({ error: '만들 문항 수를 1개 이상 입력해주세요.' });
+  }
+
+  const { maxOrder } = db
+    .prepare('SELECT COALESCE(MAX(order_index), -1) AS maxOrder FROM questions WHERE exam_id = ?')
+    .get(examId);
+
+  const insertQuestion = db.prepare(
+    "INSERT INTO questions (exam_id, order_index, type, prompt, points, created_at, updated_at) VALUES (?, ?, 'mc', '', 1, ?, ?)",
+  );
+  const insertShortQuestion = db.prepare(
+    "INSERT INTO questions (exam_id, order_index, type, prompt, points, created_at, updated_at) VALUES (?, ?, 'short', '', 1, ?, ?)",
+  );
+  const insertChoice = db.prepare(
+    'INSERT INTO choices (question_id, order_index, text, is_correct) VALUES (?, ?, ?, 0)',
+  );
+
+  let order = maxOrder + 1;
+  for (let i = 0; i < mc4; i++, order++) {
+    const { lastInsertRowid } = insertQuestion.run(examId, order, now(), now());
+    CIRCLED_DIGITS.slice(0, 4).forEach((label, ci) => insertChoice.run(lastInsertRowid, ci, label));
+  }
+  for (let i = 0; i < mc5; i++, order++) {
+    const { lastInsertRowid } = insertQuestion.run(examId, order, now(), now());
+    CIRCLED_DIGITS.slice(0, 5).forEach((label, ci) => insertChoice.run(lastInsertRowid, ci, label));
+  }
+  for (let i = 0; i < short; i++, order++) {
+    insertShortQuestion.run(examId, order, now(), now());
+  }
+
+  res.status(201).json(getExamFull(examId));
+});
+
+// 문항 순서를 드래그로 바꾼 뒤 저장. order는 이 시험의 문항 id를 새 순서로 나열한 배열.
+examsRouter.put('/:id/questions/reorder', (req, res) => {
+  const examId = Number(req.params.id);
+  const exam = getExamRow(examId);
+  if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
+
+  const { order } = req.body;
+  const current = db.prepare('SELECT id FROM questions WHERE exam_id = ?').all(examId);
+  const currentIds = new Set(current.map((q) => q.id));
+
+  if (
+    !Array.isArray(order) ||
+    order.length !== currentIds.size ||
+    !order.every((id) => currentIds.has(id))
+  ) {
+    return res.status(400).json({ error: '순서 목록이 이 시험의 문항 구성과 일치하지 않습니다.' });
+  }
+
+  const update = db.prepare('UPDATE questions SET order_index = ? WHERE id = ?');
+  order.forEach((id, i) => update.run(i, id));
+
+  res.json(getExamFull(examId));
+});
+
 function getQuestionOr404(examId, questionId, res) {
   const q = db.prepare('SELECT * FROM questions WHERE id = ? AND exam_id = ?').get(questionId, examId);
   if (!q) res.status(404).json({ error: '문항을 찾을 수 없습니다.' });
