@@ -5,6 +5,9 @@ import type { Exam, Subject } from '../../types';
 import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
 import { Badge } from '../../components/Badge';
+import { PageHeader } from '../../components/PageHeader';
+import { IconDashboard } from '../../components/icons';
+import { displaySubjectName } from '../../lib/subjectName';
 
 const GRADE_LABEL: Record<string, string> = {
   elem_1_2: '1~2학년군',
@@ -84,7 +87,7 @@ export function Dashboard() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      <h1 className="animate-fade-in-up text-2xl font-bold tracking-tight text-ink">시험지 관리</h1>
+      <PageHeader icon={IconDashboard} title="시험지 관리" />
 
       <Card className="animate-fade-in-up mt-7">
         <h2 className="text-sm font-bold text-ink">새 시험 만들기</h2>
@@ -136,7 +139,7 @@ export function Dashboard() {
             >
               {subjects.map((s) => (
                 <option key={s.subject_id} value={s.subject_id}>
-                  {s.subject_name}
+                  {displaySubjectName(s.subject_name)}
                 </option>
               ))}
             </select>
@@ -194,7 +197,7 @@ export function Dashboard() {
                     : 'bg-surface-container text-ink-soft hover:bg-line'
                 }`}
               >
-                {s.subject_name}
+                {displaySubjectName(s.subject_name)}
               </button>
             ))}
           </div>

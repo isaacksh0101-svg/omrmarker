@@ -4,6 +4,7 @@ import { api } from '../../api/client';
 import type { Exam } from '../../types';
 import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
+import { PageHeader } from '../../components/PageHeader';
 import { IconMonitor } from '../../components/icons';
 
 const GRADE_LABEL: Record<string, string> = {
@@ -28,17 +29,13 @@ export function ExamMonitorPicker() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      <div className="animate-fade-in-up flex items-center gap-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent-soft text-accent-ink">
-          <IconMonitor className="h-5 w-5" />
-        </span>
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-ink">시험 감독</h1>
-          <p className="mt-0.5 text-xs text-ink-soft">감독할 시험을 선택하면 학생들의 실시간 응시 현황을 볼 수 있어요.</p>
-        </div>
-      </div>
+      <PageHeader icon={IconMonitor} title="시험 감독" />
 
-      <div className="mt-7 flex flex-col gap-2">
+      {loaded && monitorable.length > 0 && (
+        <p className="animate-fade-in-up mt-7 text-sm font-bold text-ink-soft">감독할 시험지를 선택하세요.</p>
+      )}
+
+      <div className={`flex flex-col gap-2 ${loaded && monitorable.length > 0 ? 'mt-2' : 'mt-7'}`}>
         {loaded && monitorable.length === 0 && (
           <Card className="animate-fade-in-up text-center text-sm text-ink-soft">
             확정된 시험이 없습니다. 시험을 확정하면 여기서 감독할 수 있어요.

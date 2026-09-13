@@ -158,7 +158,6 @@ export function PaperBuildTab({ examId, questions, standardOptions, missingByQue
                   options={standardOptions}
                   selectedCodes={q.standards.map((s) => s.standard_code)}
                   onChange={(codes) => saveStandards(id, codes)}
-                  required={q.ai_suggested}
                 />
               </div>
               {missingReasons && (

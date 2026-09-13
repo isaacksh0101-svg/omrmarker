@@ -370,6 +370,20 @@ sessionsRouter.get('/:id/results', async (req, res) => {
   res.json({ sessions, questionStats, slowestQuestions, lowestAccuracyQuestions, standardsAccuracy });
 });
 
+// 문항별 정답률에서 문항 번호를 누르면 보여주는 학생별 소요시간/정답 여부 상세.
+sessionsRouter.get('/:id/questions/:qid/breakdown', async (req, res) => {
+  const examId = Number(req.params.id);
+  const qid = Number(req.params.qid);
+  const question = await repo.getQuestion(examId, qid);
+  if (!question) return res.status(404).json({ error: '문항을 찾을 수 없습니다.' });
+
+  const rows = await repo.getQuestionStudentBreakdown(qid);
+  const times = rows.map((r) => r.time_spent_ms).filter((t) => t != null);
+  const avgTimeMs = times.length > 0 ? times.reduce((a, b) => a + b, 0) / times.length : null;
+
+  res.json({ avgTimeMs, students: rows });
+});
+
 // 정답률/총 소요시간이 학급 평균에서 크게 벗어난 학생을 표시한다.
 // 표본이 너무 적으면(4명 미만) 평균/표준편차가 의미 없으므로 계산을 건너뛴다.
 function attachOutliers(sessions) {

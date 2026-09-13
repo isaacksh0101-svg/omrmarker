@@ -471,6 +471,22 @@ export async function getResultsForExam(examId) {
   return { sessions, questionStats };
 }
 
+// 문항별 정답률에서 특정 문항 번호를 눌렀을 때 보여주는 "학생별 소요시간" 상세.
+export async function getQuestionStudentBreakdown(questionId) {
+  return db
+    .prepare(
+      `SELECT es.roll_number, r.name, a.is_correct, a.time_spent_ms,
+              a.selected_choice_id, c.text AS selected_choice_text, a.short_answer_text
+       FROM answers a
+       JOIN exam_sessions es ON es.id = a.session_id
+       LEFT JOIN roster r ON r.roll_number = es.roll_number
+       LEFT JOIN choices c ON c.id = a.selected_choice_id
+       WHERE a.question_id = ? AND a.answered_at IS NOT NULL
+       ORDER BY es.roll_number`,
+    )
+    .all(questionId);
+}
+
 export async function computeStandardsAccuracy({ examId, rollNumber, from, to } = {}) {
   const conditions = ["es.status = 'submitted'", 'a.answered_at IS NOT NULL'];
   const params = [];

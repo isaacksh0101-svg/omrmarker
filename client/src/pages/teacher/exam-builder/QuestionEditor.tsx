@@ -149,7 +149,6 @@ export function QuestionEditor({ examId, question, index, standardOptions, missi
           options={standardOptions}
           selectedCodes={question.standards.map((s) => s.standard_code)}
           onChange={saveStandards}
-          required={question.ai_suggested}
         />
       </div>
 

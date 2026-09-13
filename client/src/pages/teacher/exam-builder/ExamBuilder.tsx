@@ -78,7 +78,13 @@ export function ExamBuilder() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12 pb-24">
-      <div className="animate-fade-in-up flex items-center gap-2">
+      <button
+        className="text-xs font-bold text-ink-soft transition-colors duration-150 hover:text-accent"
+        onClick={() => navigate('/')}
+      >
+        ← 시험지 관리
+      </button>
+      <div className="animate-fade-in-up mt-3 flex items-center gap-2">
         <h1 className="text-2xl font-bold tracking-tight text-ink">{exam.title}</h1>
         <Badge tone={exam.status === 'finalized' ? 'good' : 'neutral'}>
           {exam.status === 'finalized' ? '확정됨' : '작성 중'}

@@ -4,6 +4,9 @@ import { api, ApiError } from '../../api/client';
 import type { Exam, Subject } from '../../types';
 import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
+import { PageHeader } from '../../components/PageHeader';
+import { IconDocument } from '../../components/icons';
+import { displaySubjectName } from '../../lib/subjectName';
 
 const GRADE_LABEL: Record<string, string> = {
   elem_1_2: '1~2학년군',
@@ -46,6 +49,13 @@ export function ExamReportPicker() {
     }
   }
 
+  // 드롭다운에는 실제로 시험이 있는 과목만 보여준다 - 텅 빈 과목까지 나열하면 고를 게
+  // 없는 항목들만 늘어난다.
+  const availableSubjects = useMemo(() => {
+    const ids = new Set(exams.map((e) => e.subject_id));
+    return subjects.filter((s) => ids.has(s.subject_id));
+  }, [exams, subjects]);
+
   const visibleExams = useMemo(() => {
     return exams.filter((exam) => {
       if (!showArchived && exam.status === 'archived') return false;
@@ -59,70 +69,53 @@ export function ExamReportPicker() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      <h1 className="animate-fade-in-up text-2xl font-bold tracking-tight text-ink">시험별 리포트</h1>
+      <PageHeader icon={IconDocument} title="시험별 리포트" />
 
       {exams.length > 0 && (
-        <div className="animate-fade-in-up mt-5 flex flex-col gap-3">
-          <div className="flex flex-wrap gap-1.5">
-            <button
-              onClick={() => setSubjectFilter('all')}
-              className={`rounded-full px-3 py-1 text-xs font-bold transition-all duration-200 ${
-                subjectFilter === 'all' ? 'bg-accent text-white' : 'bg-surface-container text-ink-soft hover:bg-line'
-              }`}
-            >
-              전체
-            </button>
-            {subjects.map((s) => (
-              <button
-                key={s.subject_id}
-                onClick={() => setSubjectFilter(s.subject_id)}
-                className={`rounded-full px-3 py-1 text-xs font-bold transition-all duration-200 ${
-                  subjectFilter === s.subject_id
-                    ? 'bg-accent text-white'
-                    : 'bg-surface-container text-ink-soft hover:bg-line'
-                }`}
-              >
-                {s.subject_name}
-              </button>
+        <div className="animate-fade-in-up mt-5 flex flex-wrap items-center gap-2 text-xs">
+          <select
+            value={subjectFilter}
+            onChange={(e) => setSubjectFilter(e.target.value)}
+            className="rounded-lg border border-line bg-panel px-2 py-1.5 text-ink outline-none focus:border-accent"
+          >
+            <option value="all">전체 과목</option>
+            {availableSubjects.map((s) => (
+              <option key={s.subject_id} value={s.subject_id}>
+                {displaySubjectName(s.subject_name)}
+              </option>
             ))}
-          </div>
+          </select>
 
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="font-bold text-ink-soft">기간</span>
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="rounded-lg border border-line bg-panel px-2 py-1 text-ink outline-none focus:border-accent"
-            />
-            <span className="text-ink-soft">~</span>
-            <input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="rounded-lg border border-line bg-panel px-2 py-1 text-ink outline-none focus:border-accent"
-            />
-            {(dateFrom || dateTo) && (
-              <button
-                className="font-bold text-accent hover:underline"
-                onClick={() => {
-                  setDateFrom('');
-                  setDateTo('');
-                }}
-              >
-                초기화
-              </button>
-            )}
+          <span className="ml-2 font-bold text-ink-soft">기간</span>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className="rounded-lg border border-line bg-panel px-2 py-1 text-ink outline-none focus:border-accent"
+          />
+          <span className="text-ink-soft">~</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            className="rounded-lg border border-line bg-panel px-2 py-1 text-ink outline-none focus:border-accent"
+          />
+          {(dateFrom || dateTo) && (
+            <button
+              className="font-bold text-accent hover:underline"
+              onClick={() => {
+                setDateFrom('');
+                setDateTo('');
+              }}
+            >
+              초기화
+            </button>
+          )}
 
-            <label className="ml-auto flex items-center gap-1.5 font-bold text-ink-soft">
-              <input
-                type="checkbox"
-                checked={showArchived}
-                onChange={(e) => setShowArchived(e.target.checked)}
-              />
-              삭제된 시험도 표시
-            </label>
-          </div>
+          <label className="ml-auto flex items-center gap-1.5 font-bold text-ink-soft">
+            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+            삭제된 시험도 표시
+          </label>
         </div>
       )}
 

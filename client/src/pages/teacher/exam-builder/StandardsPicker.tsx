@@ -5,10 +5,9 @@ interface Props {
   options: StandardOption[];
   selectedCodes: string[];
   onChange: (codes: string[]) => void;
-  required?: boolean;
 }
 
-export function StandardsPicker({ options, selectedCodes, onChange, required }: Props) {
+export function StandardsPicker({ options, selectedCodes, onChange }: Props) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
 
@@ -33,7 +32,7 @@ export function StandardsPicker({ options, selectedCodes, onChange, required }: 
   return (
     <div>
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-xs font-bold text-ink-soft">성취기준{required ? ' (AI 문항 필수)' : ''}</span>
+        <span className="text-xs font-bold text-ink-soft">성취기준</span>
         {selected.map((s) => (
           <span
             key={s.code}

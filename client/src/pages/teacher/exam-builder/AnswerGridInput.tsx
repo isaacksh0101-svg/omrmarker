@@ -44,7 +44,8 @@ function AnswerInput({ examId, question, isInvalid, onChanged, inputRef, onEnter
     }
   }
 
-  const inputClass = 'h-9 w-full min-w-0 bg-transparent px-3 text-sm text-ink outline-none focus:bg-accent-soft';
+  const inputClass =
+    'h-9 w-full min-w-0 bg-transparent px-3 text-center text-sm text-ink outline-none focus:bg-accent-soft';
 
   return question.type === 'mc' ? (
     <input
@@ -101,12 +102,12 @@ export function AnswerGridInput({ examId, questions, missingByQuestion, onChange
   }
 
   return (
-    <div className="max-w-xs overflow-hidden rounded-xl border border-line">
+    <div className="mx-auto max-w-xs overflow-hidden rounded-xl border border-line">
       <table className="w-full border-collapse text-sm">
         <thead>
           <tr className="bg-surface-container">
-            <th className="border-b border-line px-3 py-2 text-xs font-bold text-ink-soft">문항 번호</th>
-            <th className="border-b border-line px-3 py-2 text-xs font-bold text-ink-soft">정답</th>
+            <th className="border-b border-line px-3 py-2 text-center text-xs font-bold text-ink-soft">문항 번호</th>
+            <th className="border-b border-line px-3 py-2 text-center text-xs font-bold text-ink-soft">정답</th>
           </tr>
         </thead>
         <tbody>
@@ -114,10 +115,7 @@ export function AnswerGridInput({ examId, questions, missingByQuestion, onChange
             const isInvalid = !!missingByQuestion?.get(q.id);
             return (
               <tr key={q.id} className={i > 0 ? 'border-t border-line' : ''}>
-                <td className="px-3 py-1.5 text-center font-bold text-ink">
-                  {q.order_index + 1}
-                  {q.ai_suggested && <span className="ml-1 text-[10px] font-bold text-warn">AI</span>}
-                </td>
+                <td className="px-3 py-1.5 text-center font-bold text-ink">{q.order_index + 1}</td>
                 <td className={`border-l p-0 ${isInvalid ? 'border-danger bg-danger/5' : 'border-line'}`}>
                   <AnswerInput
                     examId={examId}

@@ -4,13 +4,19 @@ interface Props {
   extra?: string;
   correct: number;
   total: number;
+  onClick?: () => void;
 }
 
-export function AccuracyRow({ label, sublabel, extra, correct, total }: Props) {
+export function AccuracyRow({ label, sublabel, extra, correct, total, onClick }: Props) {
   const pct = total > 0 ? Math.round((correct / total) * 100) : 0;
 
   return (
-    <div className="flex items-center gap-3 py-2">
+    <div
+      className={`flex items-center gap-3 py-2 ${
+        onClick ? '-mx-2 cursor-pointer rounded-lg px-2 transition-colors duration-150 hover:bg-bg' : ''
+      }`}
+      onClick={onClick}
+    >
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-bold text-ink">{label}</p>
         {sublabel && (

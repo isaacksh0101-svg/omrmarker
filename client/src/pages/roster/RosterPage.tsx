@@ -4,6 +4,8 @@ import { api, ApiError } from '../../api/client';
 import type { RosterEntry } from '../../types';
 import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
+import { PageHeader } from '../../components/PageHeader';
+import { IconUsers } from '../../components/icons';
 import { downloadWorkbook } from '../../lib/exportXlsx';
 
 function NameCell({ roll, name, onSaved }: { roll: number; name: string | null; onSaved: () => void }) {
@@ -139,7 +141,7 @@ export function RosterPage() {
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-12">
-      <h1 className="animate-fade-in-up text-2xl font-bold tracking-tight text-ink">학생 관리</h1>
+      <PageHeader icon={IconUsers} title="학생 관리" />
 
       <Card className="animate-fade-in-up mt-7">
         <h2 className="text-sm font-bold text-ink">학생 추가</h2>

@@ -3,6 +3,8 @@ import { api, ApiError } from '../../api/client';
 import type { LanInfo } from '../../types';
 import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
+import { PageHeader } from '../../components/PageHeader';
+import { IconSettings } from '../../components/icons';
 
 const LAN_IP_STORAGE_KEY = 'omr.lanIpOverride';
 
@@ -227,7 +229,7 @@ function BackupSection() {
 export function SettingsPage() {
   return (
     <div className="mx-auto max-w-2xl px-6 py-12">
-      <h1 className="animate-fade-in-up text-2xl font-bold tracking-tight text-ink">환경설정</h1>
+      <PageHeader icon={IconSettings} title="환경설정" />
       <div className="animate-fade-in-up mt-7" style={{ animationDelay: '40ms' }}>
         <StudentAccessSection />
       </div>

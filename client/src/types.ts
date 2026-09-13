@@ -149,6 +149,21 @@ export interface StandardAccuracy {
   avg_time_spent_ms: number | null;
 }
 
+export interface QuestionStudentAnswer {
+  roll_number: number;
+  name: string | null;
+  is_correct: number;
+  time_spent_ms: number | null;
+  selected_choice_id: number | null;
+  selected_choice_text: string | null;
+  short_answer_text: string | null;
+}
+
+export interface QuestionBreakdown {
+  avgTimeMs: number | null;
+  students: QuestionStudentAnswer[];
+}
+
 export interface ExamResultSession {
   roll_number: number;
   name: string | null;

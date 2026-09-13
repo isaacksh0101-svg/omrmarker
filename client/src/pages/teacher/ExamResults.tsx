@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../api/client';
-import type { Exam, ExamResultsData } from '../../types';
+import type { Exam, ExamResultsData, QuestionBreakdown } from '../../types';
 import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
 import { AccuracyRow } from '../../components/AccuracyRow';
@@ -21,11 +21,23 @@ function formatMs(ms: number | null) {
   return `${Math.round(ms / 1000)}초`;
 }
 
+// 리포트 표 안에서 자리를 너무 많이 차지하지 않도록 "2026. 9. 14. 오전 12:35:13" 대신
+// "9/14 12:35"처럼 짧게 표시한다.
+function formatSubmittedAt(iso: string) {
+  const d = new Date(iso);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${min}`;
+}
+
 export function ExamResults() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [exam, setExam] = useState<Exam | null>(null);
   const [data, setData] = useState<ExamResultsData | null>(null);
+  const [expandedQuestionId, setExpandedQuestionId] = useState<number | null>(null);
+  const [breakdowns, setBreakdowns] = useState<Record<number, QuestionBreakdown>>({});
+  const [loadingBreakdownId, setLoadingBreakdownId] = useState<number | null>(null);
 
   useEffect(() => {
     api.get<Exam>(`/exams/${id}`).then(setExam);
@@ -47,6 +59,22 @@ export function ExamResults() {
       clearInterval(interval);
     };
   }, [id]);
+
+  async function toggleQuestion(questionId: number) {
+    if (expandedQuestionId === questionId) {
+      setExpandedQuestionId(null);
+      return;
+    }
+    setExpandedQuestionId(questionId);
+    if (breakdowns[questionId]) return;
+    setLoadingBreakdownId(questionId);
+    try {
+      const breakdown = await api.get<QuestionBreakdown>(`/exams/${id}/questions/${questionId}/breakdown`);
+      setBreakdowns((prev) => ({ ...prev, [questionId]: breakdown }));
+    } finally {
+      setLoadingBreakdownId(null);
+    }
+  }
 
   if (!exam || !data) return <div className="p-10 text-sm text-ink-soft">불러오는 중...</div>;
 
@@ -107,8 +135,8 @@ export function ExamResults() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      <button className="text-xs font-bold text-ink-soft transition-colors duration-150 hover:text-accent" onClick={() => navigate('/')}>
-        ← 대시보드
+      <button className="text-xs font-bold text-ink-soft transition-colors duration-150 hover:text-accent" onClick={() => navigate(-1)}>
+        ← 뒤로
       </button>
       <div className="animate-fade-in-up mt-3 flex items-center gap-2">
         <h1 className="text-2xl font-bold tracking-tight text-ink">{exam.title}</h1>
@@ -156,21 +184,60 @@ export function ExamResults() {
       )}
 
       <Card className="animate-fade-in-up mt-4" style={{ animationDelay: '110ms' }}>
-        <h2 className="text-sm font-bold text-ink">문항별 정답률</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-bold text-ink">문항별 정답률</h2>
+          <p className="text-xs text-ink-soft">문항을 누르면 학생별 소요시간을 볼 수 있어요.</p>
+        </div>
         <div className="mt-2 divide-y divide-line">
-          {data.questionStats.map((q) => (
-            <AccuracyRow
-              key={q.question_id}
-              label={`${q.order_index + 1}번`}
-              sublabel={
-                q.prompt
-                  ? `${q.prompt.slice(0, 40)}${q.prompt.length > 40 ? '…' : ''} · 평균 ${formatMs(q.avg_time_spent_ms)}`
-                  : `평균 ${formatMs(q.avg_time_spent_ms)}`
-              }
-              correct={q.correct_count}
-              total={q.answered_count}
-            />
-          ))}
+          {data.questionStats.map((q) => {
+            const breakdown = breakdowns[q.question_id];
+            const expanded = expandedQuestionId === q.question_id;
+            return (
+              <div key={q.question_id}>
+                <AccuracyRow
+                  label={`${q.order_index + 1}번`}
+                  sublabel={
+                    q.prompt
+                      ? `${q.prompt.slice(0, 40)}${q.prompt.length > 40 ? '…' : ''} · 평균 ${formatMs(q.avg_time_spent_ms)}`
+                      : `평균 ${formatMs(q.avg_time_spent_ms)}`
+                  }
+                  correct={q.correct_count}
+                  total={q.answered_count}
+                  onClick={() => toggleQuestion(q.question_id)}
+                />
+                {expanded && (
+                  <div className="animate-fade-in-up mb-2 rounded-xl bg-bg p-3">
+                    {loadingBreakdownId === q.question_id ? (
+                      <p className="text-xs text-ink-soft">불러오는 중...</p>
+                    ) : !breakdown || breakdown.students.length === 0 ? (
+                      <p className="text-xs text-ink-soft">아직 이 문항에 응답한 학생이 없습니다.</p>
+                    ) : (
+                      <div className="flex flex-col divide-y divide-line">
+                        {breakdown.students.map((s) => (
+                          <div key={s.roll_number} className="flex items-center gap-2 py-1.5 text-xs">
+                            <span className="w-8 shrink-0 font-bold text-ink">{s.roll_number}</span>
+                            <span className="w-16 shrink-0 truncate text-ink-soft">{s.name || '-'}</span>
+                            <span
+                              className={`flex-1 truncate ${
+                                s.is_correct ? 'text-ink-soft' : 'font-bold text-danger'
+                              }`}
+                            >
+                              {s.selected_choice_text ?? s.short_answer_text ?? '-'}
+                            </span>
+                            <span
+                              className={`shrink-0 font-bold ${s.is_correct ? 'text-ink-soft' : 'text-danger'}`}
+                            >
+                              {formatMs(s.time_spent_ms)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </Card>
 
@@ -198,48 +265,46 @@ export function ExamResults() {
       </Card>
 
       <Card className="animate-fade-in-up mt-4 overflow-hidden p-0" style={{ animationDelay: '170ms' }}>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[42rem] text-sm">
-            <thead>
-              <tr className="border-b border-line text-left text-xs font-bold text-ink-soft">
-                <th className="whitespace-nowrap px-4 py-2.5">번호</th>
-                <th className="whitespace-nowrap px-4 py-2.5">이름</th>
-                <th className="whitespace-nowrap px-4 py-2.5">상태</th>
-                <th className="whitespace-nowrap px-4 py-2.5">점수</th>
-                <th className="whitespace-nowrap px-4 py-2.5">제출시각</th>
-                <th className="whitespace-nowrap px-4 py-2.5">확인 필요</th>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-line text-left text-xs font-bold text-ink-soft">
+              <th className="whitespace-nowrap px-3 py-2.5">번호</th>
+              <th className="whitespace-nowrap px-3 py-2.5">이름</th>
+              <th className="whitespace-nowrap px-3 py-2.5">상태</th>
+              <th className="whitespace-nowrap px-3 py-2.5">점수</th>
+              <th className="whitespace-nowrap px-3 py-2.5">제출시각</th>
+              <th className="whitespace-nowrap px-3 py-2.5">확인 필요</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.sessions.map((s) => (
+              <tr key={s.roll_number} className="border-b border-line last:border-0">
+                <td className="whitespace-nowrap px-3 py-2.5 font-bold text-ink">{s.roll_number}</td>
+                <td className="max-w-[7rem] truncate px-3 py-2.5 text-ink-soft">{s.name || '-'}</td>
+                <td className="whitespace-nowrap px-3 py-2.5 text-ink-soft">{STATUS_LABEL[s.status] ?? s.status}</td>
+                <td className="whitespace-nowrap px-3 py-2.5 text-ink-soft">
+                  {s.status === 'submitted' ? `${s.score} / ${s.max_score}` : '-'}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2.5 text-ink-soft">
+                  {s.submitted_at ? formatSubmittedAt(s.submitted_at) : '-'}
+                </td>
+                <td className="px-3 py-2.5">
+                  <div className="flex flex-wrap gap-1">
+                    {s.isOutlier && <Badge tone="warn">{s.outlierReasons.join(', ')}</Badge>}
+                    {s.warning_count > 0 && <Badge tone="danger">화면 이탈 {s.warning_count}회</Badge>}
+                  </div>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {data.sessions.map((s) => (
-                <tr key={s.roll_number} className="border-b border-line last:border-0">
-                  <td className="whitespace-nowrap px-4 py-2.5 font-bold text-ink">{s.roll_number}</td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-ink-soft">{s.name || '-'}</td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-ink-soft">{STATUS_LABEL[s.status] ?? s.status}</td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-ink-soft">
-                    {s.status === 'submitted' ? `${s.score} / ${s.max_score}` : '-'}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-ink-soft">
-                    {s.submitted_at ? new Date(s.submitted_at).toLocaleString('ko-KR') : '-'}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <div className="flex flex-wrap gap-1">
-                      {s.isOutlier && <Badge tone="warn">{s.outlierReasons.join(', ')}</Badge>}
-                      {s.warning_count > 0 && <Badge tone="danger">화면 이탈 {s.warning_count}회</Badge>}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {data.sessions.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-4 text-center text-ink-soft">
-                    아직 참여한 학생이 없습니다.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+            ))}
+            {data.sessions.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-3 py-4 text-center text-ink-soft">
+                  아직 참여한 학생이 없습니다.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </Card>
     </div>
   );

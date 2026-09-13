@@ -43,8 +43,10 @@ if errorlevel 1 (
     echo.
     echo [안내] OMR 프로그램이 이미 실행 중인 것 같습니다 ^(포트 4000번이 사용 중입니다^).
     echo.
-    choice /C YN /N /D Y /T 5 /M "종료하고 새로 시작할까요? 진행 중인 시험이 있다면 학생 연결이 끊깁니다. 5초 뒤 자동으로 Y로 진행합니다 (Y/N): "
-    if errorlevel 2 (
+    REM choice 명령은 프롬프트를 띄울 때마다 시스템 삑 소리를 내서, 매번 실행할 때마다
+    REM 나는 이 소리가 거슬린다는 피드백에 따라 소리 없는 PowerShell 방식으로 바꿨다.
+    powershell -NoProfile -Command "$deadline = (Get-Date).AddSeconds(5); Write-Host -NoNewline '종료하고 새로 시작할까요? 진행 중인 시험이 있다면 학생 연결이 끊깁니다. 5초 뒤 자동으로 계속 진행합니다 (Y/N): '; $key = $null; try { while ((Get-Date) -lt $deadline) { if ([Console]::KeyAvailable) { $key = [Console]::ReadKey($true); break }; Start-Sleep -Milliseconds 100 } } catch { while ((Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 } }; Write-Host ''; if ($key -and ($key.KeyChar -eq 'n' -or $key.KeyChar -eq 'N')) { exit 1 } else { exit 0 }"
+    if errorlevel 1 (
         echo.
         echo 이미 열려 있는 창을 사용해 주세요. 이 창은 닫아도 됩니다.
         echo.
