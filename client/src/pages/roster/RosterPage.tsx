@@ -3,6 +3,7 @@ import { api, ApiError } from '../../api/client';
 import type { RosterEntry } from '../../types';
 import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
+import { downloadWorkbook } from '../../lib/exportXlsx';
 
 export function RosterPage() {
   const [roster, setRoster] = useState<RosterEntry[]>([]);
@@ -43,6 +44,15 @@ export function RosterPage() {
     reload();
   }
 
+  function exportExcel() {
+    downloadWorkbook('학생명단.xlsx', [
+      {
+        name: '학생명단',
+        rows: roster.map((r) => ({ 출석번호: r.roll_number, 이름: r.name ?? '' })),
+      },
+    ]);
+  }
+
   return (
     <div className="mx-auto max-w-2xl px-6 py-10">
       <h1 className="text-xl font-bold text-ink">학생 관리</h1>
@@ -77,7 +87,14 @@ export function RosterPage() {
       </Card>
 
       <div className="mt-8">
-        <h2 className="text-sm font-bold text-ink">등록된 학생 ({roster.length}명)</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-bold text-ink">등록된 학생 ({roster.length}명)</h2>
+          {roster.length > 0 && (
+            <button className="text-xs font-bold text-accent hover:underline" onClick={exportExcel}>
+              엑셀로 다운로드
+            </button>
+          )}
+        </div>
         {roster.length === 0 ? (
           <p className="mt-3 text-sm text-ink-soft">아직 등록된 학생이 없습니다.</p>
         ) : (

@@ -6,6 +6,7 @@ import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
 import { AccuracyRow } from '../../components/AccuracyRow';
 import { StatCard, StatCardRow } from '../../components/StatCard';
+import { downloadWorkbook } from '../../lib/exportXlsx';
 
 const STATUS_LABEL: Record<string, string> = {
   joined: '참여함',
@@ -48,6 +49,44 @@ export function ExamResults() {
     return withTime.reduce((sum, q) => sum + (q.avg_time_spent_ms ?? 0), 0) / withTime.length;
   })();
 
+  function exportExcel() {
+    downloadWorkbook(`${exam!.title}_결과.xlsx`, [
+      {
+        name: '학생별 점수',
+        rows: data!.sessions.map((s) => ({
+          번호: s.roll_number,
+          이름: s.name ?? '',
+          상태: STATUS_LABEL[s.status] ?? s.status,
+          점수: s.score ?? '',
+          만점: s.max_score ?? '',
+          제출시각: s.submitted_at ? new Date(s.submitted_at).toLocaleString('ko-KR') : '',
+          확인필요: s.isOutlier ? s.outlierReasons.join(', ') : '',
+        })),
+      },
+      {
+        name: '문항별 정답률',
+        rows: data!.questionStats.map((q) => ({
+          문항번호: q.order_index + 1,
+          문제: q.prompt,
+          정답수: q.correct_count,
+          전체: q.answered_count,
+          정답률: q.answered_count > 0 ? `${Math.round((q.correct_count / q.answered_count) * 100)}%` : '',
+          평균소요시간: formatMs(q.avg_time_spent_ms),
+        })),
+      },
+      {
+        name: '성취기준별 정답률',
+        rows: data!.standardsAccuracy.map((s) => ({
+          코드: s.code,
+          내용: s.statement,
+          정답수: s.correct_count,
+          전체: s.attempted_count,
+          정답률: `${Math.round(s.accuracy * 100)}%`,
+        })),
+      },
+    ]);
+  }
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-10">
       <button className="text-xs font-bold text-ink-soft hover:text-accent" onClick={() => navigate('/')}>
@@ -56,6 +95,9 @@ export function ExamResults() {
       <div className="mt-3 flex items-center gap-2">
         <h1 className="text-xl font-bold text-ink">{exam.title}</h1>
         <Badge tone="neutral">결과</Badge>
+        <button className="ml-auto text-xs font-bold text-accent hover:underline" onClick={exportExcel}>
+          엑셀로 다운로드
+        </button>
       </div>
 
       <div className="mt-6">

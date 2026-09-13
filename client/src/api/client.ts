@@ -36,4 +36,20 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, body);
     return body as T;
   },
+  // 서버가 내려주는 파일(백업 등)을 받아서 그대로 저장 대화상자를 띄운다.
+  downloadFile: async (path: string, filename: string) => {
+    const res = await fetch(`/api${path}`);
+    if (!res.ok) {
+      const isJson = res.headers.get('content-type')?.includes('application/json');
+      const body = isJson ? await res.json().catch(() => null) : null;
+      throw new ApiError(res.status, body);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
 };

@@ -4,6 +4,7 @@ import type { RosterEntry, StandardAccuracy } from '../../types';
 import { Card } from '../../components/Card';
 import { AccuracyRow } from '../../components/AccuracyRow';
 import { StatCard, StatCardRow } from '../../components/StatCard';
+import { downloadWorkbook } from '../../lib/exportXlsx';
 
 export function StandardsReport() {
   const [roster, setRoster] = useState<RosterEntry[]>([]);
@@ -41,9 +42,32 @@ export function StandardsReport() {
     return [...bySubject.entries()];
   }, [data, sortLowFirst]);
 
+  function exportExcel() {
+    downloadWorkbook('성취기준별_리포트.xlsx', [
+      {
+        name: '성취기준별 정답률',
+        rows: data.map((s) => ({
+          교과: s.subject_name,
+          코드: s.code,
+          내용: s.statement,
+          정답수: s.correct_count,
+          전체: s.attempted_count,
+          정답률: `${Math.round(s.accuracy * 100)}%`,
+        })),
+      },
+    ]);
+  }
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-10">
-      <h1 className="text-xl font-bold text-ink">성취기준별 리포트</h1>
+      <div className="flex items-center gap-2">
+        <h1 className="text-xl font-bold text-ink">성취기준별 리포트</h1>
+        {data.length > 0 && (
+          <button className="ml-auto text-xs font-bold text-accent hover:underline" onClick={exportExcel}>
+            엑셀로 다운로드
+          </button>
+        )}
+      </div>
 
       <div className="mt-4 flex flex-wrap items-end gap-2">
         <label className="flex items-center gap-2">

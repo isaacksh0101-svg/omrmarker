@@ -14,6 +14,7 @@ import { aiRouter } from './routes/ai.js';
 import { sessionsRouter } from './routes/sessions.js';
 import { standardsRouter } from './routes/standards.js';
 import { rosterRouter } from './routes/roster.js';
+import { backupRouter } from './routes/backup.js';
 
 const app = express();
 app.use(cors());
@@ -28,6 +29,7 @@ app.use('/api/exams', aiRouter);
 app.use('/api/exams', sessionsRouter);
 app.use('/api/standards', standardsRouter);
 app.use('/api/roster', rosterRouter);
+app.use('/api/backup', backupRouter);
 
 app.get('/api/lan-info', async (_req, res) => {
   // 항상 실제 LAN IP를 기준으로 만든다. 교사가 대시보드를 localhost로 보고 있어도
