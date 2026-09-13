@@ -1,7 +1,5 @@
 import { Router } from 'express';
-import { db } from '../db/index.js';
-import { getExamRow, getExamFull } from './exams.js';
-import { getStandardByCode } from '../services/curriculumStandards.js';
+import * as repo from '../db/repo.js';
 
 export const sessionsRouter = Router();
 
@@ -20,87 +18,13 @@ function sanitizeQuestionForStudent(q, examMode) {
   };
 }
 
-export function finalizeSession(sessionId) {
-  const session = db.prepare('SELECT * FROM exam_sessions WHERE id = ?').get(sessionId);
-  if (!session || session.status === 'submitted') return;
-
-  const totals = db
-    .prepare(
-      `SELECT
-         COALESCE(SUM(a.awarded_points), 0) AS score,
-         COALESCE((SELECT SUM(points) FROM questions WHERE exam_id = ?), 0) AS max_score
-       FROM answers a
-       WHERE a.session_id = ?`,
-    )
-    .get(session.exam_id, sessionId);
-
-  db.prepare(
-    "UPDATE exam_sessions SET status = 'submitted', submitted_at = ?, score = ?, max_score = ? WHERE id = ?",
-  ).run(now(), totals.score, totals.max_score, sessionId);
-}
-
-export function computeStandardsAccuracy({ examId, rollNumber, from, to } = {}) {
-  const conditions = ["es.status = 'submitted'", 'a.answered_at IS NOT NULL'];
-  const params = [];
-  if (examId) {
-    conditions.push('q.exam_id = ?');
-    params.push(examId);
-  }
-  if (rollNumber) {
-    conditions.push('es.roll_number = ?');
-    params.push(rollNumber);
-  }
-  if (from) {
-    conditions.push('date(es.submitted_at) >= date(?)');
-    params.push(from);
-  }
-  if (to) {
-    conditions.push('date(es.submitted_at) <= date(?)');
-    params.push(to);
-  }
-
-  const rows = db
-    .prepare(
-      `SELECT qs.standard_code AS code,
-              COUNT(*) AS attempted_count,
-              COALESCE(SUM(a.is_correct), 0) AS correct_count
-       FROM answers a
-       JOIN questions q ON q.id = a.question_id
-       JOIN question_standards qs ON qs.question_id = q.id
-       JOIN exam_sessions es ON es.id = a.session_id
-       WHERE ${conditions.join(' AND ')}
-       GROUP BY qs.standard_code`,
-    )
-    .all(...params);
-
-  return rows
-    .map((r) => {
-      const std = getStandardByCode(r.code);
-      if (!std) return null;
-      return {
-        code: r.code,
-        statement: std.statement,
-        subject_id: std.subject_id,
-        subject_name: std.subject_name,
-        grade_cluster: std.grade_cluster,
-        attempted_count: r.attempted_count,
-        correct_count: r.correct_count,
-        accuracy: r.attempted_count > 0 ? r.correct_count / r.attempted_count : 0,
-      };
-    })
-    .filter(Boolean);
-}
-
 // ---- 학생용: 시험 메타 (정답 정보 없음) ----
 
-sessionsRouter.get('/:id/for-student', (req, res) => {
-  const exam = getExamRow(Number(req.params.id));
+sessionsRouter.get('/:id/for-student', async (req, res) => {
+  const exam = await repo.getExamFull(Number(req.params.id));
   if (!exam || exam.status !== 'finalized') {
     return res.status(404).json({ error: '응시할 수 있는 시험을 찾을 수 없습니다.' });
   }
-  const { count } = db
-    .prepare('SELECT COUNT(*) AS count FROM questions WHERE exam_id = ?')
-    .get(exam.id);
   res.json({
     id: exam.id,
     title: exam.title,
@@ -108,15 +32,15 @@ sessionsRouter.get('/:id/for-student', (req, res) => {
     grade_cluster: exam.grade_cluster,
     time_limit_sec: exam.time_limit_sec,
     mode: exam.mode,
-    question_count: count,
+    question_count: exam.questions.length,
   });
 });
 
 // ---- 세션 참가/조회 ----
 
-sessionsRouter.post('/:id/sessions', (req, res) => {
+sessionsRouter.post('/:id/sessions', async (req, res) => {
   const examId = Number(req.params.id);
-  const exam = getExamRow(examId);
+  const exam = await repo.getExam(examId);
   if (!exam || exam.status !== 'finalized') {
     return res.status(400).json({ error: '응시할 수 있는 시험이 아닙니다.' });
   }
@@ -125,68 +49,52 @@ sessionsRouter.post('/:id/sessions', (req, res) => {
   if (!Number.isInteger(rollNumber)) {
     return res.status(400).json({ error: '출석번호를 입력해주세요.' });
   }
-  const student = db.prepare('SELECT * FROM roster WHERE roll_number = ?').get(rollNumber);
+  const student = await repo.getRosterEntry(rollNumber);
   if (!student) {
     return res.status(400).json({ error: '등록되지 않은 번호입니다.' });
   }
 
-  let session = db
-    .prepare('SELECT * FROM exam_sessions WHERE exam_id = ? AND roll_number = ?')
-    .get(examId, rollNumber);
-
+  let session = await repo.getSessionByExamAndRoll(examId, rollNumber);
   if (!session) {
-    const result = db
-      .prepare('INSERT INTO exam_sessions (exam_id, roll_number, status) VALUES (?, ?, ?)')
-      .run(examId, rollNumber, 'joined');
-    session = db.prepare('SELECT * FROM exam_sessions WHERE id = ?').get(result.lastInsertRowid);
+    session = await repo.createSession(examId, rollNumber);
   }
 
   res.status(201).json(session);
 });
 
-function getSessionOr404(examId, sessionId, res) {
-  const session = db
-    .prepare('SELECT * FROM exam_sessions WHERE id = ? AND exam_id = ?')
-    .get(sessionId, examId);
-  if (!session) res.status(404).json({ error: '응시 세션을 찾을 수 없습니다.' });
+async function getSessionOr404(examId, sessionId, res) {
+  const session = await repo.getSession(sessionId);
+  if (!session || session.exam_id !== examId) {
+    res.status(404).json({ error: '응시 세션을 찾을 수 없습니다.' });
+    return undefined;
+  }
   return session;
 }
 
-sessionsRouter.get('/:id/sessions/:sessionId', (req, res) => {
+sessionsRouter.get('/:id/sessions/:sessionId', async (req, res) => {
   const examId = Number(req.params.id);
   const sessionId = Number(req.params.sessionId);
-  const session = getSessionOr404(examId, sessionId, res);
+  const session = await getSessionOr404(examId, sessionId, res);
   if (!session) return;
 
   const payload = { ...session };
   if (session.status === 'submitted') {
-    payload.answers = db
-      .prepare(
-        `SELECT q.order_index, a.is_correct, a.awarded_points
-         FROM answers a
-         JOIN questions q ON q.id = a.question_id
-         WHERE a.session_id = ?
-         ORDER BY q.order_index`,
-      )
-      .all(sessionId);
+    payload.answers = await repo.getSessionAnswerSummary(sessionId);
   }
   res.json(payload);
 });
 
-sessionsRouter.post('/:id/sessions/:sessionId/start', (req, res) => {
+sessionsRouter.post('/:id/sessions/:sessionId/start', async (req, res) => {
   const examId = Number(req.params.id);
   const sessionId = Number(req.params.sessionId);
-  const session = getSessionOr404(examId, sessionId, res);
+  const session = await getSessionOr404(examId, sessionId, res);
   if (!session) return;
 
   if (session.status !== 'joined') {
     return res.json(session);
   }
-  db.prepare("UPDATE exam_sessions SET status = 'in_progress', started_at = ? WHERE id = ?").run(
-    now(),
-    sessionId,
-  );
-  res.json(db.prepare('SELECT * FROM exam_sessions WHERE id = ?').get(sessionId));
+  await repo.startSession(sessionId);
+  res.json(await repo.getSession(sessionId));
 });
 
 function isTimedOut(session, exam) {
@@ -195,12 +103,12 @@ function isTimedOut(session, exam) {
   return Date.now() > deadline;
 }
 
-sessionsRouter.get('/:id/sessions/:sessionId/current-question', (req, res) => {
+sessionsRouter.get('/:id/sessions/:sessionId/current-question', async (req, res) => {
   const examId = Number(req.params.id);
   const sessionId = Number(req.params.sessionId);
-  const session = getSessionOr404(examId, sessionId, res);
+  const session = await getSessionOr404(examId, sessionId, res);
   if (!session) return;
-  const exam = getExamFull(examId);
+  const exam = await repo.getExamFull(examId);
 
   if (session.status === 'submitted') {
     return res.json({ done: true });
@@ -210,23 +118,19 @@ sessionsRouter.get('/:id/sessions/:sessionId/current-question', (req, res) => {
   }
 
   if (isTimedOut(session, exam)) {
-    finalizeSession(sessionId);
+    await repo.finalizeSession(sessionId);
     return res.json({ done: true, timedOut: true });
   }
 
   const question = exam.questions[session.current_question_index];
   if (!question) {
-    finalizeSession(sessionId);
+    await repo.finalizeSession(sessionId);
     return res.json({ done: true });
   }
 
-  const existingAnswer = db
-    .prepare('SELECT * FROM answers WHERE session_id = ? AND question_id = ?')
-    .get(sessionId, question.id);
+  const existingAnswer = await repo.getAnswer(sessionId, question.id);
   if (!existingAnswer) {
-    db.prepare(
-      'INSERT INTO answers (session_id, question_id, shown_at) VALUES (?, ?, ?)',
-    ).run(sessionId, question.id, now());
+    await repo.createAnswerShown(sessionId, question.id, now());
   }
 
   res.json({
@@ -237,18 +141,18 @@ sessionsRouter.get('/:id/sessions/:sessionId/current-question', (req, res) => {
   });
 });
 
-sessionsRouter.post('/:id/sessions/:sessionId/answers', (req, res) => {
+sessionsRouter.post('/:id/sessions/:sessionId/answers', async (req, res) => {
   const examId = Number(req.params.id);
   const sessionId = Number(req.params.sessionId);
-  const session = getSessionOr404(examId, sessionId, res);
+  const session = await getSessionOr404(examId, sessionId, res);
   if (!session) return;
-  const exam = getExamFull(examId);
+  const exam = await repo.getExamFull(examId);
 
   if (session.status !== 'in_progress') {
     return res.status(400).json({ error: '응시 중인 세션이 아닙니다.' });
   }
   if (isTimedOut(session, exam)) {
-    finalizeSession(sessionId);
+    await repo.finalizeSession(sessionId);
     return res.json({ done: true, timedOut: true });
   }
 
@@ -258,9 +162,7 @@ sessionsRouter.post('/:id/sessions/:sessionId/answers', (req, res) => {
     return res.status(400).json({ error: '현재 문항과 일치하지 않습니다.' });
   }
 
-  const answerRow = db
-    .prepare('SELECT * FROM answers WHERE session_id = ? AND question_id = ?')
-    .get(sessionId, questionId);
+  const answerRow = await repo.getAnswer(sessionId, questionId);
   if (!answerRow || answerRow.answered_at) {
     return res.status(400).json({ error: '이미 응답한 문항입니다.' });
   }
@@ -286,75 +188,45 @@ sessionsRouter.post('/:id/sessions/:sessionId/answers', (req, res) => {
   const answeredAt = now();
   const timeSpentMs = Date.now() - new Date(answerRow.shown_at).getTime();
 
-  db.prepare(
-    `UPDATE answers
-     SET selected_choice_id = ?, short_answer_text = ?, answered_at = ?, time_spent_ms = ?,
-         is_correct = ?, awarded_points = ?
-     WHERE id = ?`,
-  ).run(selectedChoiceId, shortAnswerText, answeredAt, timeSpentMs, isCorrect, awardedPoints, answerRow.id);
+  await repo.submitAnswer(sessionId, questionId, {
+    selectedChoiceId,
+    shortAnswerText,
+    answeredAt,
+    timeSpentMs,
+    isCorrect,
+    awardedPoints,
+  });
 
   const nextIndex = session.current_question_index + 1;
-  db.prepare('UPDATE exam_sessions SET current_question_index = ? WHERE id = ?').run(
-    nextIndex,
-    sessionId,
-  );
+  await repo.advanceSession(sessionId, nextIndex);
 
   if (nextIndex >= exam.questions.length) {
-    finalizeSession(sessionId);
+    await repo.finalizeSession(sessionId);
     return res.json({ done: true });
   }
   res.json({ done: false });
 });
 
-sessionsRouter.post('/:id/sessions/:sessionId/submit', (req, res) => {
+sessionsRouter.post('/:id/sessions/:sessionId/submit', async (req, res) => {
   const examId = Number(req.params.id);
   const sessionId = Number(req.params.sessionId);
-  const session = getSessionOr404(examId, sessionId, res);
+  const session = await getSessionOr404(examId, sessionId, res);
   if (!session) return;
 
-  finalizeSession(sessionId);
-  res.json(db.prepare('SELECT * FROM exam_sessions WHERE id = ?').get(sessionId));
+  await repo.finalizeSession(sessionId);
+  res.json(await repo.getSession(sessionId));
 });
 
 // ---- 교사용 결과 집계 ----
 
-sessionsRouter.get('/:id/results', (req, res) => {
+sessionsRouter.get('/:id/results', async (req, res) => {
   const examId = Number(req.params.id);
-  const exam = getExamFull(examId);
+  const exam = await repo.getExamFull(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
 
-  const sessions = db
-    .prepare(
-      `SELECT es.roll_number, r.name, es.status, es.score, es.max_score, es.submitted_at,
-              (SELECT COALESCE(SUM(a.time_spent_ms), 0) FROM answers a WHERE a.session_id = es.id) AS total_time_ms
-       FROM exam_sessions es
-       LEFT JOIN roster r ON r.roll_number = es.roll_number
-       WHERE es.exam_id = ?
-       ORDER BY es.roll_number`,
-    )
-    .all(examId);
+  const { sessions, questionStats } = await repo.getResultsForExam(examId);
 
   attachOutliers(sessions);
-
-  const questionStats = exam.questions.map((q) => {
-    const stat = db
-      .prepare(
-        `SELECT COUNT(*) AS answered_count,
-                COALESCE(SUM(is_correct), 0) AS correct_count,
-                AVG(time_spent_ms) AS avg_time_spent_ms
-         FROM answers
-         WHERE question_id = ? AND answered_at IS NOT NULL`,
-      )
-      .get(q.id);
-    return {
-      question_id: q.id,
-      order_index: q.order_index,
-      prompt: q.prompt,
-      answered_count: stat.answered_count,
-      correct_count: stat.correct_count,
-      avg_time_spent_ms: stat.avg_time_spent_ms ?? null,
-    };
-  });
 
   const slowestQuestions = [...questionStats]
     .filter((q) => q.avg_time_spent_ms != null)
@@ -365,7 +237,7 @@ sessionsRouter.get('/:id/results', (req, res) => {
     .sort((a, b) => a.correct_count / a.answered_count - b.correct_count / b.answered_count)
     .slice(0, 3);
 
-  const standardsAccuracy = computeStandardsAccuracy({ examId });
+  const standardsAccuracy = await repo.computeStandardsAccuracy({ examId });
 
   res.json({ sessions, questionStats, slowestQuestions, lowestAccuracyQuestions, standardsAccuracy });
 });

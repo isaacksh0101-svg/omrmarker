@@ -162,8 +162,6 @@ export interface ExamResultsData {
 }
 
 export interface LanInfo {
-  ip: string;
-  port: number;
   url: string;
   studentUrl: string;
   qr: string | null;

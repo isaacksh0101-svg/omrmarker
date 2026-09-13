@@ -30,6 +30,10 @@ app.use('/api/standards', standardsRouter);
 app.use('/api/roster', rosterRouter);
 
 app.get('/api/lan-info', async (_req, res) => {
+  // 항상 실제 LAN IP를 기준으로 만든다. 교사가 대시보드를 localhost로 보고 있어도
+  // (예: 실행하기.bat가 자동으로 여는 주소) QR/링크는 반드시 다른 기기가 접속 가능한
+  // 실제 IP를 가리켜야 한다 - 요청의 host 헤더를 그대로 쓰면 localhost가 그대로 QR에
+  // 박혀서 학생 휴대폰에서 스캔했을 때 "사이트에 접근할 수 없음"이 뜨는 문제가 있었다.
   const ip = getLanIp();
   const url = `http://${ip}:${config.port}`;
   const studentUrl = `${url}/student`;
@@ -37,7 +41,7 @@ app.get('/api/lan-info', async (_req, res) => {
   // /student 같은 화면 경로는 서빙하지 않는다. QR은 그대로 보여주되 화면에서 경고해야 한다.
   const servingClient = fs.existsSync(config.clientDistDir);
   const qr = await QRCode.toDataURL(studentUrl).catch(() => null);
-  res.json({ ip, port: config.port, url, studentUrl, qr, servingClient });
+  res.json({ url, studentUrl, qr, servingClient });
 });
 
 // 프로덕션 실행: 빌드된 클라이언트 정적 파일을 같은 포트에서 서빙한다.

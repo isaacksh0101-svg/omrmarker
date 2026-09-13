@@ -1,77 +1,42 @@
 import { Router } from 'express';
-import { db } from '../db/index.js';
+import * as repo from '../db/repo.js';
 import { getStandardByCode } from '../services/curriculumStandards.js';
 
 export const examsRouter = Router();
 
-function now() {
-  return new Date().toISOString();
+export async function getExamRow(id) {
+  return repo.getExam(id);
 }
 
-export function getExamRow(id) {
-  return db.prepare('SELECT * FROM exams WHERE id = ?').get(id);
-}
-
-export function getExamFull(id) {
-  const exam = getExamRow(id);
-  if (!exam) return null;
-
-  const questions = db
-    .prepare('SELECT * FROM questions WHERE exam_id = ? ORDER BY order_index')
-    .all(id)
-    .map((q) => {
-      const choices = db
-        .prepare('SELECT * FROM choices WHERE question_id = ? ORDER BY order_index')
-        .all(q.id)
-        .map((c) => ({ ...c, is_correct: !!c.is_correct }));
-      const standards = db
-        .prepare('SELECT standard_code, statement_snapshot, is_ai_suggested, confidence FROM question_standards WHERE question_id = ?')
-        .all(q.id)
-        .map((s) => ({ ...s, is_ai_suggested: !!s.is_ai_suggested }));
-      return {
-        ...q,
-        ai_suggested: !!q.ai_suggested,
-        correct_short_answers: q.correct_short_answers ? JSON.parse(q.correct_short_answers) : null,
-        choices,
-        standards,
-      };
-    });
-
-  return { ...exam, questions };
+export async function getExamFull(id) {
+  return repo.getExamFull(id);
 }
 
 // ---- 시험 CRUD ----
 
-examsRouter.get('/', (_req, res) => {
-  const rows = db
-    .prepare('SELECT id, title, subject_id, grade_cluster, time_limit_sec, status, started_at, created_at FROM exams ORDER BY created_at DESC')
-    .all();
-  res.json(rows);
+examsRouter.get('/', async (_req, res) => {
+  res.json(await repo.listExams());
 });
 
-examsRouter.post('/', (req, res) => {
+examsRouter.post('/', async (req, res) => {
   const { title, subject_id, grade_cluster, time_limit_sec } = req.body;
   const mode = req.body.mode === 'paper_marking' ? 'paper_marking' : 'online';
   if (!title || !subject_id || !grade_cluster || !Number.isInteger(time_limit_sec)) {
     return res.status(400).json({ error: 'title, subject_id, grade_cluster, time_limit_sec가 모두 필요합니다.' });
   }
-  const result = db
-    .prepare(
-      'INSERT INTO exams (title, subject_id, grade_cluster, time_limit_sec, mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    )
-    .run(title, subject_id, grade_cluster, time_limit_sec, mode, now(), now());
-  res.status(201).json(getExamFull(result.lastInsertRowid));
+  const id = await repo.createExam({ title, subject_id, grade_cluster, time_limit_sec, mode });
+  res.status(201).json(await repo.getExamFull(id));
 });
 
-examsRouter.get('/:id', (req, res) => {
-  const exam = getExamFull(Number(req.params.id));
+examsRouter.get('/:id', async (req, res) => {
+  const exam = await repo.getExamFull(Number(req.params.id));
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
   res.json(exam);
 });
 
-examsRouter.put('/:id', (req, res) => {
+examsRouter.put('/:id', async (req, res) => {
   const id = Number(req.params.id);
-  const exam = getExamRow(id);
+  const exam = await repo.getExam(id);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
 
   const title = req.body.title ?? exam.title;
@@ -80,22 +45,20 @@ examsRouter.put('/:id', (req, res) => {
   const time_limit_sec = req.body.time_limit_sec ?? exam.time_limit_sec;
   const mode = req.body.mode ?? exam.mode;
 
-  db.prepare(
-    'UPDATE exams SET title = ?, subject_id = ?, grade_cluster = ?, time_limit_sec = ?, mode = ?, updated_at = ? WHERE id = ?',
-  ).run(title, subject_id, grade_cluster, time_limit_sec, mode, now(), id);
-  res.json(getExamFull(id));
+  await repo.updateExam(id, { title, subject_id, grade_cluster, time_limit_sec, mode });
+  res.json(await repo.getExamFull(id));
 });
 
-examsRouter.delete('/:id', (req, res) => {
-  db.prepare('DELETE FROM exams WHERE id = ?').run(Number(req.params.id));
+examsRouter.delete('/:id', async (req, res) => {
+  await repo.deleteExam(Number(req.params.id));
   res.status(204).end();
 });
 
 // ---- 문항 CRUD ----
 
-examsRouter.post('/:id/questions', (req, res) => {
+examsRouter.post('/:id/questions', async (req, res) => {
   const examId = Number(req.params.id);
-  const exam = getExamRow(examId);
+  const exam = await repo.getExam(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
 
   const { type, points } = req.body;
@@ -104,26 +67,16 @@ examsRouter.post('/:id/questions', (req, res) => {
     return res.status(400).json({ error: "type은 'mc' 또는 'short'여야 합니다." });
   }
 
-  const { maxOrder } = db
-    .prepare('SELECT COALESCE(MAX(order_index), -1) AS maxOrder FROM questions WHERE exam_id = ?')
-    .get(examId);
-
-  const result = db
-    .prepare(
-      'INSERT INTO questions (exam_id, order_index, type, prompt, points, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    )
-    .run(examId, maxOrder + 1, type, prompt, points ?? 1, now(), now());
-
-  res.status(201).json(getExamFull(examId).questions.find((q) => q.id === result.lastInsertRowid));
+  const newId = await repo.addQuestion(examId, { type, prompt, points });
+  const full = await repo.getExamFull(examId);
+  res.status(201).json(full.questions.find((q) => q.id === newId));
 });
-
-const CIRCLED_DIGITS = ['①', '②', '③', '④', '⑤', '⑥'];
 
 // 종이 시험지 "틀 만들기": 객관식(4/5지선다)·단답형 개수만 받아 한 번에 문항을 생성한다.
 // 정답은 아직 정하지 않는다 - 이후 "정답 입력" 단계에서 채운다.
-examsRouter.post('/:id/questions/batch', (req, res) => {
+examsRouter.post('/:id/questions/batch', async (req, res) => {
   const examId = Number(req.params.id);
-  const exam = getExamRow(examId);
+  const exam = await repo.getExam(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
 
   const mc4 = Number.isInteger(req.body.mc4) ? req.body.mc4 : 0;
@@ -133,45 +86,18 @@ examsRouter.post('/:id/questions/batch', (req, res) => {
     return res.status(400).json({ error: '만들 문항 수를 1개 이상 입력해주세요.' });
   }
 
-  const { maxOrder } = db
-    .prepare('SELECT COALESCE(MAX(order_index), -1) AS maxOrder FROM questions WHERE exam_id = ?')
-    .get(examId);
-
-  const insertQuestion = db.prepare(
-    "INSERT INTO questions (exam_id, order_index, type, prompt, points, created_at, updated_at) VALUES (?, ?, 'mc', '', 1, ?, ?)",
-  );
-  const insertShortQuestion = db.prepare(
-    "INSERT INTO questions (exam_id, order_index, type, prompt, points, created_at, updated_at) VALUES (?, ?, 'short', '', 1, ?, ?)",
-  );
-  const insertChoice = db.prepare(
-    'INSERT INTO choices (question_id, order_index, text, is_correct) VALUES (?, ?, ?, 0)',
-  );
-
-  let order = maxOrder + 1;
-  for (let i = 0; i < mc4; i++, order++) {
-    const { lastInsertRowid } = insertQuestion.run(examId, order, now(), now());
-    CIRCLED_DIGITS.slice(0, 4).forEach((label, ci) => insertChoice.run(lastInsertRowid, ci, label));
-  }
-  for (let i = 0; i < mc5; i++, order++) {
-    const { lastInsertRowid } = insertQuestion.run(examId, order, now(), now());
-    CIRCLED_DIGITS.slice(0, 5).forEach((label, ci) => insertChoice.run(lastInsertRowid, ci, label));
-  }
-  for (let i = 0; i < short; i++, order++) {
-    insertShortQuestion.run(examId, order, now(), now());
-  }
-
-  res.status(201).json(getExamFull(examId));
+  await repo.batchCreateQuestions(examId, { mc4, mc5, short });
+  res.status(201).json(await repo.getExamFull(examId));
 });
 
 // 문항 순서를 드래그로 바꾼 뒤 저장. order는 이 시험의 문항 id를 새 순서로 나열한 배열.
-examsRouter.put('/:id/questions/reorder', (req, res) => {
+examsRouter.put('/:id/questions/reorder', async (req, res) => {
   const examId = Number(req.params.id);
-  const exam = getExamRow(examId);
+  const exam = await repo.getExam(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
 
   const { order } = req.body;
-  const current = db.prepare('SELECT id FROM questions WHERE exam_id = ?').all(examId);
-  const currentIds = new Set(current.map((q) => q.id));
+  const currentIds = new Set(await repo.getQuestionIds(examId));
 
   if (
     !Array.isArray(order) ||
@@ -181,60 +107,44 @@ examsRouter.put('/:id/questions/reorder', (req, res) => {
     return res.status(400).json({ error: '순서 목록이 이 시험의 문항 구성과 일치하지 않습니다.' });
   }
 
-  const update = db.prepare('UPDATE questions SET order_index = ? WHERE id = ?');
-  order.forEach((id, i) => update.run(i, id));
-
-  res.json(getExamFull(examId));
+  await repo.reorderQuestions(examId, order);
+  res.json(await repo.getExamFull(examId));
 });
 
-function getQuestionOr404(examId, questionId, res) {
-  const q = db.prepare('SELECT * FROM questions WHERE id = ? AND exam_id = ?').get(questionId, examId);
+async function getQuestionOr404(examId, questionId, res) {
+  const q = await repo.getQuestion(examId, questionId);
   if (!q) res.status(404).json({ error: '문항을 찾을 수 없습니다.' });
   return q;
 }
 
-examsRouter.put('/:id/questions/:qid', (req, res) => {
+examsRouter.put('/:id/questions/:qid', async (req, res) => {
   const examId = Number(req.params.id);
   const qid = Number(req.params.qid);
-  const question = getQuestionOr404(examId, qid, res);
+  const question = await getQuestionOr404(examId, qid, res);
   if (!question) return;
 
   const prompt = req.body.prompt ?? question.prompt;
   const points = req.body.points ?? question.points;
   const type = req.body.type ?? question.type;
 
-  db.prepare('UPDATE questions SET prompt = ?, points = ?, type = ?, updated_at = ? WHERE id = ?').run(
-    prompt,
-    points,
-    type,
-    now(),
-    qid,
-  );
-  res.json(getExamFull(examId).questions.find((q) => q.id === qid));
+  await repo.updateQuestion(examId, qid, { prompt, points, type });
+  const full = await repo.getExamFull(examId);
+  res.json(full.questions.find((q) => q.id === qid));
 });
 
-examsRouter.delete('/:id/questions/:qid', (req, res) => {
+examsRouter.delete('/:id/questions/:qid', async (req, res) => {
   const examId = Number(req.params.id);
   const qid = Number(req.params.qid);
-  db.prepare('DELETE FROM questions WHERE id = ? AND exam_id = ?').run(qid, examId);
-
-  // order_index 재정렬 (구멍 없이 유지)
-  const remaining = db
-    .prepare('SELECT id FROM questions WHERE exam_id = ? ORDER BY order_index')
-    .all(examId);
-  remaining.forEach((q, i) => {
-    db.prepare('UPDATE questions SET order_index = ? WHERE id = ?').run(i, q.id);
-  });
-
-  res.json(getExamFull(examId));
+  await repo.deleteQuestion(examId, qid);
+  res.json(await repo.getExamFull(examId));
 });
 
 // ---- 보기(객관식) ----
 
-examsRouter.put('/:id/questions/:qid/choices', (req, res) => {
+examsRouter.put('/:id/questions/:qid/choices', async (req, res) => {
   const examId = Number(req.params.id);
   const qid = Number(req.params.qid);
-  const question = getQuestionOr404(examId, qid, res);
+  const question = await getQuestionOr404(examId, qid, res);
   if (!question) return;
 
   const { choices } = req.body; // [{text, is_correct}]
@@ -242,23 +152,17 @@ examsRouter.put('/:id/questions/:qid/choices', (req, res) => {
     return res.status(400).json({ error: 'choices 배열이 필요합니다.' });
   }
 
-  db.prepare('DELETE FROM choices WHERE question_id = ?').run(qid);
-  const insert = db.prepare(
-    'INSERT INTO choices (question_id, order_index, text, is_correct) VALUES (?, ?, ?, ?)',
-  );
-  choices.forEach((c, i) => {
-    insert.run(qid, i, c.text, c.is_correct ? 1 : 0);
-  });
-
-  res.json(getExamFull(examId).questions.find((q) => q.id === qid));
+  await repo.setChoices(qid, choices);
+  const full = await repo.getExamFull(examId);
+  res.json(full.questions.find((q) => q.id === qid));
 });
 
 // ---- 정답(단답형) ----
 
-examsRouter.put('/:id/questions/:qid/answer', (req, res) => {
+examsRouter.put('/:id/questions/:qid/answer', async (req, res) => {
   const examId = Number(req.params.id);
   const qid = Number(req.params.qid);
-  const question = getQuestionOr404(examId, qid, res);
+  const question = await getQuestionOr404(examId, qid, res);
   if (!question) return;
 
   const { correct_short_answers } = req.body; // string[]
@@ -266,20 +170,17 @@ examsRouter.put('/:id/questions/:qid/answer', (req, res) => {
     return res.status(400).json({ error: 'correct_short_answers 배열이 필요합니다.' });
   }
 
-  db.prepare('UPDATE questions SET correct_short_answers = ?, updated_at = ? WHERE id = ?').run(
-    JSON.stringify(correct_short_answers),
-    now(),
-    qid,
-  );
-  res.json(getExamFull(examId).questions.find((q) => q.id === qid));
+  await repo.setShortAnswer(qid, correct_short_answers);
+  const full = await repo.getExamFull(examId);
+  res.json(full.questions.find((q) => q.id === qid));
 });
 
 // ---- 성취기준 태깅 ----
 
-examsRouter.put('/:id/questions/:qid/standards', (req, res) => {
+examsRouter.put('/:id/questions/:qid/standards', async (req, res) => {
   const examId = Number(req.params.id);
   const qid = Number(req.params.qid);
-  const question = getQuestionOr404(examId, qid, res);
+  const question = await getQuestionOr404(examId, qid, res);
   if (!question) return;
 
   const { codes } = req.body; // string[]
@@ -292,23 +193,16 @@ examsRouter.put('/:id/questions/:qid/standards', (req, res) => {
     return res.status(400).json({ error: '알 수 없는 성취기준 코드입니다.', unknown });
   }
 
-  db.prepare('DELETE FROM question_standards WHERE question_id = ?').run(qid);
-  const insert = db.prepare(
-    'INSERT INTO question_standards (question_id, standard_code, statement_snapshot, is_ai_suggested, confidence) VALUES (?, ?, ?, 0, NULL)',
-  );
-  codes.forEach((code) => {
-    const std = getStandardByCode(code);
-    insert.run(qid, code, std.statement);
-  });
-
-  res.json(getExamFull(examId).questions.find((q) => q.id === qid));
+  await repo.setStandards(qid, codes);
+  const full = await repo.getExamFull(examId);
+  res.json(full.questions.find((q) => q.id === qid));
 });
 
 // ---- 확정(finalize) ----
 
-examsRouter.post('/:id/finalize', (req, res) => {
+examsRouter.post('/:id/finalize', async (req, res) => {
   const examId = Number(req.params.id);
-  const exam = getExamFull(examId);
+  const exam = await repo.getExamFull(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
 
   if (exam.questions.length === 0) {
@@ -342,6 +236,6 @@ examsRouter.post('/:id/finalize', (req, res) => {
     return res.status(400).json({ error: '완성되지 않은 문항이 있습니다.', missing });
   }
 
-  db.prepare("UPDATE exams SET status = 'finalized', updated_at = ? WHERE id = ?").run(now(), examId);
-  res.json(getExamFull(examId));
+  await repo.finalizeExam(examId);
+  res.json(await repo.getExamFull(examId));
 });

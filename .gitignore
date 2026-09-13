@@ -5,5 +5,7 @@ server/data/uploads/*
 !server/data/uploads/.gitkeep
 .env
 .env.local
+server/firebase-service-account.json
 *.log
 .DS_Store
+.vercel
