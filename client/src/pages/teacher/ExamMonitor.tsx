@@ -7,6 +7,7 @@ import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
 import { StatCard, StatCardRow } from '../../components/StatCard';
+import { MathText } from '../../components/MathText';
 import { IconEye, IconStopCircle } from '../../components/icons';
 
 type Tone = 'neutral' | 'good' | 'warn' | 'danger';
@@ -31,6 +32,12 @@ function formatMs(ms: number | null) {
   return `${Math.round(ms / 1000)}초`;
 }
 
+const EXTRA_TIME_OPTIONS = [
+  { label: '+1분', seconds: 60 },
+  { label: '+5분', seconds: 300 },
+  { label: '+10분', seconds: 600 },
+];
+
 function StudentCard({
   student,
   questionCount,
@@ -38,6 +45,7 @@ function StudentCard({
   index,
   onView,
   onForceEnd,
+  onExtendTime,
 }: {
   student: MonitorStudent;
   questionCount: number;
@@ -45,10 +53,12 @@ function StudentCard({
   index: number;
   onView: () => void;
   onForceEnd: () => void;
+  onExtendTime: (seconds: number) => void;
 }) {
   const meta = statusMeta(student.status);
   const canView = student.session_id != null;
   const canForceEnd = student.status === 'joined' || student.status === 'in_progress';
+  const extraTimeSec = student.extra_time_sec ?? 0;
   const warnCount = student.warning_count ?? 0;
   const warnTone: Tone = warnCount === 0 ? 'neutral' : warnCount >= maxWarnings ? 'danger' : 'warn';
   const progressPct =
@@ -109,6 +119,26 @@ function StudentCard({
         <span className="text-xs font-bold text-ink-soft">누적 경고</span>
         <Badge tone={warnTone}>{warnCount}회</Badge>
       </div>
+
+      {student.status === 'in_progress' && (
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-bold text-ink-soft">
+            시간 추가{extraTimeSec > 0 ? ` (+${Math.round(extraTimeSec / 60)}분 함)` : ''}
+          </span>
+          <div className="flex gap-1">
+            {EXTRA_TIME_OPTIONS.map((opt) => (
+              <button
+                key={opt.seconds}
+                type="button"
+                onClick={() => onExtendTime(opt.seconds)}
+                className="rounded-full border border-line px-2 py-0.5 text-[11px] font-bold text-ink-soft transition-colors duration-150 hover:border-accent hover:bg-accent-soft hover:text-accent-ink"
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="mt-auto flex gap-2 pt-1">
         <button
@@ -202,10 +232,18 @@ function StudentDetailModal({
                   <p className="text-xs font-bold text-accent-ink">
                     지금 보고 있는 화면 · {detail.currentQuestion.index + 1} / {detail.currentQuestion.total}
                   </p>
-                  {detail.currentQuestion.prompt && (
-                    <p className="mt-2 whitespace-pre-wrap text-sm font-bold text-ink">
-                      {detail.currentQuestion.prompt}
-                    </p>
+                  {detail.currentQuestion.prompt_image_path ? (
+                    <img
+                      src={`/uploads/${detail.currentQuestion.prompt_image_path}`}
+                      alt="문항 이미지"
+                      className="mt-2 max-w-full rounded-lg border border-line"
+                    />
+                  ) : (
+                    detail.currentQuestion.prompt && (
+                      <p className="mt-2 whitespace-pre-wrap text-sm font-bold text-ink">
+                        <MathText text={detail.currentQuestion.prompt} />
+                      </p>
+                    )
                   )}
                   {detail.currentQuestion.type === 'mc' && (
                     <div className="mt-2 flex flex-col gap-1.5">
@@ -214,7 +252,9 @@ function StudentDetailModal({
                           key={c.id}
                           className="flex items-center justify-between rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs text-ink"
                         >
-                          <span>{c.text}</span>
+                          <span>
+                            <MathText text={c.text} />
+                          </span>
                           {c.is_correct && <span className="text-[10px] font-bold text-good">정답(교사용)</span>}
                         </div>
                       ))}
@@ -320,6 +360,15 @@ export function ExamMonitor() {
       if (pulseTimeout.current) clearTimeout(pulseTimeout.current);
     };
   }, [examId, load]);
+
+  async function extendTime(sessionId: number, seconds: number) {
+    try {
+      await api.post(`/exams/${examId}/sessions/${sessionId}/extend-time`, { seconds });
+      load();
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : '시간 추가 중 오류가 발생했습니다.');
+    }
+  }
 
   async function forceEnd(sessionId: number, rollNumber: number) {
     if (!confirm(`${rollNumber}번 학생의 시험을 지금 강제로 종료할까요? 되돌릴 수 없습니다.`)) return;
@@ -442,6 +491,7 @@ export function ExamMonitor() {
               index={i}
               onView={() => s.session_id != null && setViewingSessionId(s.session_id)}
               onForceEnd={() => s.session_id != null && forceEnd(s.session_id, s.roll_number)}
+              onExtendTime={(seconds) => s.session_id != null && extendTime(s.session_id, seconds)}
             />
           ))}
         </div>

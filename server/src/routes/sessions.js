@@ -15,6 +15,7 @@ function sanitizeQuestionForStudent(q, examMode) {
     order_index: q.order_index,
     type: q.type,
     prompt: examMode === 'paper_marking' ? '' : q.prompt,
+    prompt_image_path: examMode === 'paper_marking' ? null : q.prompt_image_path,
     points: q.points,
     choices: q.choices.map((c) => ({ id: c.id, order_index: c.order_index, text: c.text })),
   };
@@ -124,8 +125,22 @@ sessionsRouter.post('/:id/end-all', async (req, res) => {
 
 function isTimedOut(session, exam) {
   if (!session.started_at) return false;
-  const deadline = new Date(session.started_at).getTime() + exam.time_limit_sec * 1000;
+  const deadline =
+    new Date(session.started_at).getTime() + (exam.time_limit_sec + (session.extra_time_sec ?? 0)) * 1000;
   return Date.now() > deadline;
+}
+
+// 1차 진행(순서대로 문항을 보여주는 단계)이 끝났을 때 호출한다. 건너뛴(응답 안 한) 문항이
+// 남아 있으면 그것부터 마저 처리하게 하고, 하나도 없으면 그제서야 실제로 제출 확정한다.
+async function finishForwardPassOrReview(examId, sessionId) {
+  const pending = await repo.countPendingAnswers(sessionId);
+  if (pending > 0) {
+    emitExamMonitorUpdate(examId);
+    return { done: false, reviewMode: true, pendingCount: pending };
+  }
+  await repo.finalizeSession(sessionId);
+  emitExamMonitorUpdate(examId);
+  return { done: true };
 }
 
 sessionsRouter.get('/:id/sessions/:sessionId/current-question', async (req, res) => {
@@ -150,9 +165,7 @@ sessionsRouter.get('/:id/sessions/:sessionId/current-question', async (req, res)
 
   const question = exam.questions[session.current_question_index];
   if (!question) {
-    await repo.finalizeSession(sessionId);
-    emitExamMonitorUpdate(examId);
-    return res.json({ done: true });
+    return res.json(await finishForwardPassOrReview(examId, sessionId));
   }
 
   const existingAnswer = await repo.getAnswer(sessionId, question.id);
@@ -166,6 +179,23 @@ sessionsRouter.get('/:id/sessions/:sessionId/current-question', async (req, res)
     total: exam.questions.length,
     question: sanitizeQuestionForStudent(question, exam.mode),
   });
+});
+
+// 건너뛴(응답 안 하고 지나간) 문항들 - 1차 진행을 다 돌고 나서 다시 보여줄 목록.
+sessionsRouter.get('/:id/sessions/:sessionId/pending-questions', async (req, res) => {
+  const examId = Number(req.params.id);
+  const sessionId = Number(req.params.sessionId);
+  const session = await getSessionOr404(examId, sessionId, res);
+  if (!session) return;
+  const exam = await repo.getExamFull(examId);
+
+  const pendingIds = await repo.getPendingQuestionIds(sessionId);
+  const questions = pendingIds
+    .map((qid) => exam.questions.find((q) => q.id === qid))
+    .filter(Boolean)
+    .map((q) => sanitizeQuestionForStudent(q, exam.mode));
+
+  res.json({ questions });
 });
 
 sessionsRouter.post('/:id/sessions/:sessionId/answers', async (req, res) => {
@@ -184,10 +214,10 @@ sessionsRouter.post('/:id/sessions/:sessionId/answers', async (req, res) => {
     return res.json({ done: true, timedOut: true });
   }
 
-  const question = exam.questions[session.current_question_index];
   const questionId = Number(req.body.question_id);
-  if (!question || question.id !== questionId) {
-    return res.status(400).json({ error: '현재 문항과 일치하지 않습니다.' });
+  const question = exam.questions.find((q) => q.id === questionId);
+  if (!question) {
+    return res.status(400).json({ error: '문항을 찾을 수 없습니다.' });
   }
 
   const answerRow = await repo.getAnswer(sessionId, questionId);
@@ -225,16 +255,87 @@ sessionsRouter.post('/:id/sessions/:sessionId/answers', async (req, res) => {
     awardedPoints,
   });
 
-  const nextIndex = session.current_question_index + 1;
-  await repo.advanceSession(sessionId, nextIndex);
+  // 지금 답한 문항이 1차 진행 중인 "현재" 문항이면 다음으로 넘어간다. 건너뛰었다가 복습
+  // 화면에서 뒤늦게 답한 거라면(1차 진행은 이미 끝난 상태) 진행 위치는 그대로 둔다.
+  const isInSequence = questionId === exam.questions[session.current_question_index]?.id;
+  if (isInSequence) {
+    const nextIndex = session.current_question_index + 1;
+    await repo.advanceSession(sessionId, nextIndex);
+    if (nextIndex >= exam.questions.length) {
+      return res.json(await finishForwardPassOrReview(examId, sessionId));
+    }
+    emitExamMonitorUpdate(examId);
+    return res.json({ done: false });
+  }
 
-  if (nextIndex >= exam.questions.length) {
+  const pending = await repo.countPendingAnswers(sessionId);
+  if (pending === 0) {
     await repo.finalizeSession(sessionId);
     emitExamMonitorUpdate(examId);
     return res.json({ done: true });
   }
   emitExamMonitorUpdate(examId);
+  res.json({ done: false, reviewMode: true, pendingCount: pending });
+});
+
+// 지금 문항에 답하지 않고 건너뛴다 - 1차 진행 중인 "현재" 문항에만 쓸 수 있다(복습 화면에서
+// 다시 보여준 문항은 답하거나 포기하거나 둘 중 하나만 가능).
+sessionsRouter.post('/:id/sessions/:sessionId/skip', async (req, res) => {
+  const examId = Number(req.params.id);
+  const sessionId = Number(req.params.sessionId);
+  const session = await getSessionOr404(examId, sessionId, res);
+  if (!session) return;
+  const exam = await repo.getExamFull(examId);
+
+  if (session.status !== 'in_progress') {
+    return res.status(400).json({ error: '응시 중인 세션이 아닙니다.' });
+  }
+  if (isTimedOut(session, exam)) {
+    await repo.finalizeSession(sessionId);
+    emitExamMonitorUpdate(examId);
+    return res.json({ done: true, timedOut: true });
+  }
+
+  const question = exam.questions[session.current_question_index];
+  const questionId = Number(req.body.question_id);
+  if (!question || question.id !== questionId) {
+    return res.status(400).json({ error: '현재 문항과 일치하지 않습니다.' });
+  }
+
+  const nextIndex = session.current_question_index + 1;
+  await repo.advanceSession(sessionId, nextIndex);
+  if (nextIndex >= exam.questions.length) {
+    return res.json(await finishForwardPassOrReview(examId, sessionId));
+  }
+  emitExamMonitorUpdate(examId);
   res.json({ done: false });
+});
+
+// 복습 화면에서 건너뛴 문항을 "포기"로 마감 - 빈 답(오답 처리)으로 채점하고 목록에서 뺀다.
+sessionsRouter.post('/:id/sessions/:sessionId/give-up', async (req, res) => {
+  const examId = Number(req.params.id);
+  const sessionId = Number(req.params.sessionId);
+  const session = await getSessionOr404(examId, sessionId, res);
+  if (!session) return;
+
+  if (session.status !== 'in_progress') {
+    return res.status(400).json({ error: '응시 중인 세션이 아닙니다.' });
+  }
+
+  const questionId = Number(req.body.question_id);
+  const ok = await repo.giveUpAnswer(sessionId, questionId, now());
+  if (!ok) {
+    return res.status(400).json({ error: '포기할 수 없는 문항입니다.' });
+  }
+
+  const pending = await repo.countPendingAnswers(sessionId);
+  if (pending === 0) {
+    await repo.finalizeSession(sessionId);
+    emitExamMonitorUpdate(examId);
+    return res.json({ done: true });
+  }
+  emitExamMonitorUpdate(examId);
+  res.json({ done: false, reviewMode: true, pendingCount: pending });
 });
 
 sessionsRouter.post('/:id/sessions/:sessionId/warning', async (req, res) => {
@@ -310,6 +411,7 @@ sessionsRouter.get('/:id/sessions/:sessionId/monitor', async (req, res) => {
         total: exam.questions.length,
         type: q.type,
         prompt: q.prompt,
+        prompt_image_path: q.prompt_image_path,
         choices: q.choices.map((c) => ({
           id: c.id,
           order_index: c.order_index,
@@ -343,6 +445,27 @@ sessionsRouter.post('/:id/sessions/:sessionId/force-submit', async (req, res) =>
   await repo.finalizeSession(sessionId, 'force_submitted');
   emitExamMonitorUpdate(examId);
   res.json(await repo.getSession(sessionId));
+});
+
+// 교사가 시험 감독 화면에서 특정 학생에게만 시간을 더 준다(+1/+5/+10분 등). 이미 끝난
+// 세션은 더 줘도 의미가 없으므로 응시 중일 때만 허용한다.
+sessionsRouter.post('/:id/sessions/:sessionId/extend-time', async (req, res) => {
+  const examId = Number(req.params.id);
+  const sessionId = Number(req.params.sessionId);
+  const session = await getSessionOr404(examId, sessionId, res);
+  if (!session) return;
+
+  if (session.status !== 'in_progress') {
+    return res.status(400).json({ error: '응시 중인 학생에게만 시간을 추가할 수 있습니다.' });
+  }
+  const seconds = Number(req.body.seconds);
+  if (!Number.isInteger(seconds) || seconds === 0) {
+    return res.status(400).json({ error: 'seconds가 필요합니다.' });
+  }
+
+  const updated = await repo.addExtraTime(sessionId, seconds);
+  emitExamMonitorUpdate(examId);
+  res.json(updated);
 });
 
 // ---- 교사용 결과 집계 ----

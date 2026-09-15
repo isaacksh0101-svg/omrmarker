@@ -25,6 +25,9 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true });
 });
 
+// AI로 문항을 불러올 때 원본 이미지에서 잘라낸 발문 이미지 - 학생/교사 화면이 이 경로로 요청한다.
+app.use('/uploads', express.static(config.uploadsDir));
+
 app.use('/api/exams', examsRouter);
 app.use('/api/exams', aiRouter);
 app.use('/api/exams', sessionsRouter);

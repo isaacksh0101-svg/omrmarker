@@ -23,6 +23,7 @@ export interface Question {
   order_index: number;
   type: QuestionType;
   prompt: string;
+  prompt_image_path: string | null;
   points: number;
   correct_short_answers: string[] | null;
   ai_suggested: boolean;
@@ -76,6 +77,7 @@ export interface ExamSession {
   started_at: string | null;
   submitted_at: string | null;
   warning_count: number;
+  extra_time_sec: number;
   score: number | null;
   max_score: number | null;
   current_question_index: number;
@@ -103,6 +105,7 @@ export interface PublicQuestion {
   order_index: number;
   type: QuestionType;
   prompt: string;
+  prompt_image_path: string | null;
   points: number;
   choices: PublicChoice[];
 }
@@ -117,9 +120,15 @@ export interface WarningResponse {
 export interface CurrentQuestionResponse {
   done: boolean;
   timedOut?: boolean;
+  reviewMode?: boolean;
+  pendingCount?: number;
   index?: number;
   total?: number;
   question?: PublicQuestion;
+}
+
+export interface PendingQuestionsResponse {
+  questions: PublicQuestion[];
 }
 
 export interface RosterEntry {
@@ -192,6 +201,7 @@ export interface MonitorStudent {
   status: SessionStatus | null;
   current_question_index: number | null;
   warning_count: number | null;
+  extra_time_sec: number | null;
   started_at: string | null;
   submitted_at: string | null;
   score: number | null;
@@ -216,6 +226,7 @@ export interface MonitorCurrentQuestion {
   total: number;
   type: QuestionType;
   prompt: string;
+  prompt_image_path: string | null;
   choices: { id: number; order_index: number; text: string; is_correct: boolean }[];
 }
 

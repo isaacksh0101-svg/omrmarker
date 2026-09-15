@@ -92,10 +92,22 @@ export function QuestionEditor({ examId, question, index, standardOptions, missi
         </button>
       </div>
 
+      {question.prompt_image_path && (
+        <div className="mt-3">
+          <img
+            src={`/uploads/${question.prompt_image_path}`}
+            alt={`${index + 1}번 문항 원본 이미지`}
+            className="max-w-full rounded-lg border border-line"
+          />
+          <p className="mt-1 text-[11px] text-ink-soft">
+            학생 화면엔 이 이미지가 문제 내용으로 보여집니다. 아래 텍스트는 검색/백업용 보조 내용입니다.
+          </p>
+        </div>
+      )}
       <textarea
         className="mt-3 w-full resize-none rounded-xl border border-line bg-bg px-3 py-2 text-sm text-ink outline-none focus:border-accent"
         rows={2}
-        placeholder="문제 내용을 입력하세요"
+        placeholder={question.prompt_image_path ? '(선택) 텍스트 보조 설명' : '문제 내용을 입력하세요'}
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         onBlur={savePromptAndPoints}

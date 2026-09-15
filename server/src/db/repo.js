@@ -203,7 +203,7 @@ export async function addExtractedQuestions(examId, extractedQuestions) {
     .get(examId);
 
   const insertQuestion = db.prepare(
-    'INSERT INTO questions (exam_id, order_index, type, prompt, points, ai_suggested, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 1, ?, ?)',
+    'INSERT INTO questions (exam_id, order_index, type, prompt, prompt_image_path, points, ai_suggested, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?)',
   );
   const insertChoice = db.prepare(
     'INSERT INTO choices (question_id, order_index, text, is_correct) VALUES (?, ?, ?, 0)',
@@ -213,7 +213,15 @@ export async function addExtractedQuestions(examId, extractedQuestions) {
   );
 
   for (const [i, q] of extractedQuestions.entries()) {
-    const result = await insertQuestion.run(examId, maxOrder + 1 + i, q.type, q.prompt, now(), now());
+    const result = await insertQuestion.run(
+      examId,
+      maxOrder + 1 + i,
+      q.type,
+      q.prompt,
+      q.prompt_image_path ?? null,
+      now(),
+      now(),
+    );
     const questionId = result.lastInsertRowid;
 
     if (q.type === 'mc') {
@@ -345,6 +353,52 @@ export async function advanceSession(sessionId, nextIndex) {
   await db.prepare('UPDATE exam_sessions SET current_question_index = ? WHERE id = ?').run(nextIndex, sessionId);
 }
 
+// 교사가 시험 감독 화면에서 학생 한 명에게만 시간을 더 준다. 음수로는 못 깎게(0 밑으로는
+// 안 내려가게) 해서 실수로 시간을 줄여 학생이 강제 종료되는 사고를 막는다.
+export async function addExtraTime(sessionId, seconds) {
+  await db
+    .prepare('UPDATE exam_sessions SET extra_time_sec = MAX(0, extra_time_sec + ?) WHERE id = ?')
+    .run(seconds, sessionId);
+  return getSession(sessionId);
+}
+
+// "건너뛰기": 보여줬지만(shown) 아직 답하지 않은(answered_at IS NULL) 문항 - 1차 진행을
+// 다 돌고 나면 이것들을 모아 학생에게 다시 보여준다.
+export async function countPendingAnswers(sessionId) {
+  const row = await db
+    .prepare('SELECT COUNT(*) AS n FROM answers WHERE session_id = ? AND answered_at IS NULL')
+    .get(sessionId);
+  return row.n;
+}
+
+export async function getPendingQuestionIds(sessionId) {
+  const rows = await db
+    .prepare(
+      `SELECT q.id FROM answers a
+       JOIN questions q ON q.id = a.question_id
+       WHERE a.session_id = ? AND a.answered_at IS NULL
+       ORDER BY q.order_index`,
+    )
+    .all(sessionId);
+  return rows.map((r) => r.id);
+}
+
+// 건너뛴 문항을 "포기"로 마감 - 빈 답으로 채점(오답 처리)해 더 이상 미응답 상태로 남지 않게 한다.
+export async function giveUpAnswer(sessionId, questionId, answeredAt) {
+  const answerRow = await getAnswer(sessionId, questionId);
+  if (!answerRow || answerRow.answered_at) return false;
+  const timeSpentMs = Date.now() - new Date(answerRow.shown_at).getTime();
+  await submitAnswer(sessionId, questionId, {
+    selectedChoiceId: null,
+    shortAnswerText: '',
+    answeredAt,
+    timeSpentMs,
+    isCorrect: 0,
+    awardedPoints: 0,
+  });
+  return true;
+}
+
 // 화면 이탈/포커스 아웃 이벤트를 기록한다. 짧은 시간 안에 연달아 들어오는 이벤트
 // (예: 탭 전환 한 번에 visibility_hidden과 window_blur가 거의 동시에 발생)는 한 번의
 // 부정행위 시도로 보고 debounceMs 안에 들어오면 카운트하지 않되, 로그 자체는 남긴다.
@@ -407,7 +461,7 @@ export async function getMonitorStudents(examId) {
     .prepare(
       `SELECT r.roll_number, r.name, es.id AS session_id, es.status,
               es.current_question_index, es.warning_count, es.started_at, es.submitted_at,
-              es.score, es.max_score
+              es.score, es.max_score, es.extra_time_sec
        FROM roster r
        LEFT JOIN exam_sessions es ON es.roll_number = r.roll_number AND es.exam_id = ?
        ORDER BY r.roll_number`,

@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS questions (
   order_index INTEGER NOT NULL,
   type TEXT NOT NULL CHECK(type IN ('mc','short')),
   prompt TEXT NOT NULL,
+  -- AI 추출 시 원본 이미지에서 이 문항 발문 영역만 잘라낸 이미지 (uploads 기준 상대 경로).
+  -- 수식/도형/선긋기처럼 텍스트로 옮기면 깨지기 쉬운 내용을 원본 그대로 보여주기 위함.
+  prompt_image_path TEXT,
   points REAL NOT NULL DEFAULT 1,
   correct_short_answers TEXT,
   ai_suggested INTEGER NOT NULL DEFAULT 0,
@@ -67,6 +70,7 @@ CREATE TABLE IF NOT EXISTS exam_sessions (
   started_at TEXT,
   submitted_at TEXT,
   warning_count INTEGER NOT NULL DEFAULT 0,
+  extra_time_sec INTEGER NOT NULL DEFAULT 0,
   score REAL,
   max_score REAL,
   current_question_index INTEGER NOT NULL DEFAULT 0,

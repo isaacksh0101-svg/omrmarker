@@ -158,23 +158,73 @@ function StudentAccessSection() {
   );
 }
 
+type BackupCategory = 'all' | 'exams' | 'roster' | 'grades';
+
+const BACKUP_CATEGORIES: Array<{
+  key: BackupCategory;
+  label: string;
+  description: string;
+  confirmMessage: string;
+  fileSuffix: string;
+}> = [
+  {
+    key: 'all',
+    label: '전체',
+    description:
+      '시험지·학생 명단·응시 기록을 전부 담습니다. 반이나 학년을 옮길 때 새 기기에서 이 파일을 불러오면 지금까지 쓰던 데이터를 그대로 이어서 쓸 수 있습니다.',
+    confirmMessage: '지금 있는 시험지·학생 명단·응시 기록이 모두 이 백업 파일 내용으로 교체됩니다. 계속할까요?',
+    fileSuffix: '',
+  },
+  {
+    key: 'exams',
+    label: '시험지',
+    description:
+      '문제·선택지만 담습니다. 가져오면 기존 시험지는 그대로 두고 새 시험지로 추가됩니다(교체 아님) - 성적/명단은 건드리지 않습니다.',
+    confirmMessage: '이 백업에 담긴 시험지가 새 시험지로 추가됩니다(기존 시험지·성적은 그대로 유지). 계속할까요?',
+    fileSuffix: '-시험지',
+  },
+  {
+    key: 'roster',
+    label: '학생 명단',
+    description: '출석번호·이름만 담습니다. 가져오면 지금 명단을 통째로 대체합니다.',
+    confirmMessage: '지금 있는 학생 명단이 모두 이 백업 파일 내용으로 교체됩니다. 계속할까요?',
+    fileSuffix: '-명단',
+  },
+  {
+    key: 'grades',
+    label: '성적',
+    description:
+      '응시 기록·답안·경고 기록만 담습니다. 가져오면 지금 있는 성적을 통째로 대체합니다. 시험지 구성이 그때와 다르면 실패할 수 있어요.',
+    confirmMessage: '지금 있는 모든 시험의 응시 기록(성적)이 모두 이 백업 파일 내용으로 교체됩니다. 계속할까요?',
+    fileSuffix: '-성적',
+  },
+];
+
 function BackupSection() {
   const importInputRef = useRef<HTMLInputElement>(null);
+  const [category, setCategory] = useState<BackupCategory>('all');
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importDone, setImportDone] = useState(false);
 
+  const current = BACKUP_CATEGORIES.find((c) => c.key === category)!;
+
+  function selectCategory(key: BackupCategory) {
+    setCategory(key);
+    setImportError(null);
+    setImportDone(false);
+  }
+
   async function exportBackup() {
     const today = new Date().toISOString().slice(0, 10);
-    await api.downloadFile('/backup/export', `omr-backup-${today}.sqlite3`);
+    const query = category === 'all' ? '' : `?category=${category}`;
+    await api.downloadFile(`/backup/export${query}`, `omr-backup${current.fileSuffix}-${today}.sqlite3`);
   }
 
   async function importBackup(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (
-      !confirm('지금 있는 시험지·학생 명단·응시 기록이 모두 이 백업 파일 내용으로 교체됩니다. 계속할까요?')
-    ) {
+    if (!confirm(current.confirmMessage)) {
       if (importInputRef.current) importInputRef.current.value = '';
       return;
     }
@@ -183,8 +233,14 @@ function BackupSection() {
     try {
       const formData = new FormData();
       formData.append('file', file);
+      formData.append('category', category);
       await api.postForm('/backup/import', formData);
       setImportDone(true);
+      if (category !== 'all') {
+        // 전체 가져오기는 서버가 재시작되지만, 카테고리 가져오기는 지금 켜져 있는 서버가
+        // 바로 반영하므로 화면에 남아있는 캐시된 목록만 새로고침하면 된다.
+        setTimeout(() => window.location.reload(), 800);
+      }
     } catch (err) {
       setImportError(err instanceof ApiError ? err.message : '가져오기 중 오류가 발생했습니다.');
     } finally {
@@ -196,13 +252,26 @@ function BackupSection() {
   return (
     <Card className="mt-6">
       <h2 className="text-sm font-bold text-ink">데이터 백업</h2>
-      <p className="mt-1 text-xs text-ink-soft">
-        시험지·학생 명단·응시 기록이 담긴 파일입니다. 반이나 학년을 옮길 때 여기서 내려받은 파일을 새
-        기기에서 불러오면 지금까지 쓰던 데이터를 그대로 이어서 쓸 수 있습니다.
-      </p>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {BACKUP_CATEGORIES.map((c) => (
+          <button
+            key={c.key}
+            type="button"
+            onClick={() => selectCategory(c.key)}
+            className={`rounded-lg border px-2.5 py-1 text-xs font-bold ${
+              category === c.key ? 'border-accent-ink bg-accent-soft text-accent-ink' : 'border-line text-ink-soft'
+            }`}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-ink-soft">{current.description}</p>
       {importDone ? (
         <p className="mt-3 rounded-xl bg-good/15 px-3 py-2 text-sm font-bold text-good">
-          가져오기 완료되었습니다. 이 창을 닫고 실행하기를 다시 실행해주세요.
+          {category === 'all'
+            ? '가져오기 완료되었습니다. 이 창을 닫고 실행하기를 다시 실행해주세요.'
+            : '가져오기 완료되었습니다. 화면을 새로고침합니다...'}
         </p>
       ) : (
         <div className="mt-3 flex flex-wrap items-center gap-2">

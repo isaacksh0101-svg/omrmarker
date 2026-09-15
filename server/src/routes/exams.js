@@ -231,7 +231,7 @@ examsRouter.post('/:id/finalize', async (req, res) => {
     const reasons = [];
     // 온라인 모드는 학생 화면에 문제를 그대로 보여주므로 내용이 비어 있으면 안 되지만,
     // 종이 마킹 모드는 학생이 종이 시험지를 보므로 문제 내용은 선택 사항이다.
-    if (exam.mode === 'online' && !q.prompt.trim()) {
+    if (exam.mode === 'online' && !q.prompt.trim() && !q.prompt_image_path) {
       reasons.push('문제 내용이 비어 있습니다.');
     }
     if (q.type === 'mc') {

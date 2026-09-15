@@ -28,3 +28,13 @@ const examColumns = db.prepare('PRAGMA table_info(exams)').all().map((c) => c.na
 if (!examColumns.includes('mode')) {
   db.exec("ALTER TABLE exams ADD COLUMN mode TEXT NOT NULL DEFAULT 'online'");
 }
+
+const sessionColumns = db.prepare('PRAGMA table_info(exam_sessions)').all().map((c) => c.name);
+if (!sessionColumns.includes('extra_time_sec')) {
+  db.exec('ALTER TABLE exam_sessions ADD COLUMN extra_time_sec INTEGER NOT NULL DEFAULT 0');
+}
+
+const questionColumns = db.prepare('PRAGMA table_info(questions)').all().map((c) => c.name);
+if (!questionColumns.includes('prompt_image_path')) {
+  db.exec('ALTER TABLE questions ADD COLUMN prompt_image_path TEXT');
+}

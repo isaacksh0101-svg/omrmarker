@@ -112,3 +112,42 @@ export function IconGrip(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+
+export function IconPen(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 20l0.6-3.4L15.2 6l3.2 3.2L7.8 19.6 4 20Z" />
+      <path d="M13 8.2l3.2 3.2" />
+    </svg>
+  );
+}
+
+export function IconEraser(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M17.5 3.5 20.5 6.5 9.8 17.2H5.5v-4.3L17.5 3.5Z" />
+      <path d="M9.8 17.2H20" />
+      <path d="M13 7 17 11" />
+    </svg>
+  );
+}
+
+export function IconTrash(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M5 7.5h14" />
+      <path d="M9.5 7.5V5.8c0-.7.6-1.3 1.3-1.3h2.4c.7 0 1.3.6 1.3 1.3V7.5" />
+      <path d="M7 7.5 7.8 19c.05.8.7 1.5 1.5 1.5h5.4c.8 0 1.45-.7 1.5-1.5l.8-11.5" />
+      <path d="M10.3 11v6M13.7 11v6" />
+    </svg>
+  );
+}
+
+export function IconUndo(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M7 7 3.5 10.5 7 14" />
+      <path d="M3.5 10.5h10.2c3.2 0 5.8 2.6 5.8 5.8v0.2" />
+    </svg>
+  );
+}
