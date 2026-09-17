@@ -1,5 +1,11 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { Router } from 'express';
+import { Jimp } from 'jimp';
+import { config } from '../config.js';
 import * as repo from '../db/repo.js';
+import { upload } from '../middleware/upload.js';
 import { getStandardByCode } from '../services/curriculumStandards.js';
 
 export const examsRouter = Router();
@@ -154,6 +160,39 @@ examsRouter.delete('/:id/questions/:qid', async (req, res) => {
   const qid = Number(req.params.qid);
   await repo.deleteQuestion(examId, qid);
   res.json(await repo.getExamFull(examId));
+});
+
+// 문항 이미지 재크롭: AI가 자동으로 잘라준 이미지가 잘못됐을 때, 교사가 브라우저에서
+// 원본 PDF/이미지를 다시 골라 영역을 선택해 자른 결과(PNG)만 여기로 올린다. 원본 파일
+// 자체는 서버로 전송되지 않고 클라이언트에서 이미 잘린 이미지만 받으므로, 서버가 시험지
+// 원본을 계속 보관할 필요가 없다.
+examsRouter.post('/:id/questions/:qid/prompt-image', upload.single('image'), async (req, res) => {
+  const examId = Number(req.params.id);
+  const qid = Number(req.params.qid);
+  const question = await getQuestionOr404(examId, qid, res);
+  if (!question) return;
+  if (!req.file) return res.status(400).json({ error: '이미지 파일이 필요합니다.' });
+
+  let image;
+  try {
+    image = await Jimp.read(req.file.buffer);
+  } catch {
+    return res.status(400).json({ error: '이미지를 읽을 수 없습니다.' });
+  }
+
+  const dir = path.join(config.uploadsDir, 'questions');
+  fs.mkdirSync(dir, { recursive: true });
+  const filename = `${crypto.randomUUID()}.png`;
+  await image.write(path.join(dir, filename));
+
+  const oldPath = question.prompt_image_path;
+  await repo.setPromptImage(qid, `questions/${filename}`);
+  if (oldPath) {
+    fs.rm(path.join(config.uploadsDir, oldPath), { force: true }, () => {});
+  }
+
+  const full = await repo.getExamFull(examId);
+  res.json(full.questions.find((q) => q.id === qid));
 });
 
 // ---- 보기(객관식) ----

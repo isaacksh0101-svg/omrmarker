@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS questions (
   points REAL NOT NULL DEFAULT 1,
   correct_short_answers TEXT,
   ai_suggested INTEGER NOT NULL DEFAULT 0,
+  -- AI가 이 문항에 제안한 성취기준 후보 전체(2~3개, confidence/rationale 포함)를 JSON
+  -- 배열로 담아둔다. 실제로 태그된 성취기준(question_standards)은 그중 1순위만 자동
+  -- 적용되고, 나머지 후보는 교사가 판단을 검토할 수 있도록 보여주기 위한 참고용이다.
+  ai_standard_candidates TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -74,6 +78,15 @@ CREATE TABLE IF NOT EXISTS exam_sessions (
   score REAL,
   max_score REAL,
   current_question_index INTEGER NOT NULL DEFAULT 0,
+  -- 같은 출석번호로 이미 참여/응시 중인 세션에 다른 기기가 또 참여하려 하면 기본적으로
+  -- 막는다(둘이 동시에 같은 세션을 건드리면 답 제출/이탈 경고가 뒤섞인다). 원래 쓰던
+  -- 기기가 고장나서 다른 기기로 이어가야 하는 등 정당한 상황엔, 교사가 "실시간 감독"에서
+  -- 재참여를 허용해줘야 하고, 그러면 다음 참여 시도 한 번만 통과시키고 다시 0으로 돌아간다.
+  allow_rejoin INTEGER NOT NULL DEFAULT 0,
+  -- force_submitted 상태가 왜 됐는지: 'teacher_manual'(교사가 직접/전체 종료),
+  -- 'screen_leave'(화면 이탈 감지로 즉시 종료), NULL(시간 초과로 인한 일반 submitted).
+  -- 학생 화면과 감독 화면에서 사유를 구분해서 보여주는 데 쓴다.
+  disqualify_reason TEXT,
   UNIQUE(exam_id, roll_number)
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_exam ON exam_sessions(exam_id);

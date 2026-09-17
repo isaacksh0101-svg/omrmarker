@@ -27,7 +27,10 @@ export function Dashboard() {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
   const [creating, setCreating] = useState(false);
-  const [deletingId, setDeletingId] = useState<number | null>(null);
+  // 선택 삭제 모드 - 켜져 있는 동안엔 카드를 눌러도 시험으로 안 들어가고 선택만 토글된다.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [form, setForm] = useState({
     title: '',
     subject_id: '',
@@ -61,29 +64,48 @@ export function Dashboard() {
     }
   }
 
-  async function deleteExam(exam: Exam, e: React.MouseEvent) {
-    e.stopPropagation();
-    if (
-      !confirm(
-        `"${exam.title}" 시험지를 삭제할까요?\n목록에서 사라지지만, 이미 응시한 결과는 계속 보관되어 시험별 리포트에서 확인할 수 있습니다.`,
-      )
-    ) {
+  function toggleSelect(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }
+
+  async function bulkDelete() {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    if (!confirm(`선택한 시험지 ${ids.length}개를 삭제할까요?\n목록에서 사라지지만, 이미 응시한 결과는 계속 보관되어 시험별 리포트에서 확인할 수 있습니다.`)) {
       return;
     }
-    setDeletingId(exam.id);
+    setBulkDeleting(true);
     try {
-      await api.delete(`/exams/${exam.id}`);
-      setExams((prev) => prev.filter((e2) => e2.id !== exam.id));
+      await Promise.all(ids.map((id) => api.delete(`/exams/${id}`)));
+      setExams((prev) => prev.filter((e2) => !selectedIds.has(e2.id)));
+      exitSelectMode();
     } catch (err) {
       alert(err instanceof ApiError ? err.message : '삭제 중 오류가 발생했습니다.');
     } finally {
-      setDeletingId(null);
+      setBulkDeleting(false);
     }
   }
 
   const visibleExams = exams.filter(
     (exam) => exam.status !== 'archived' && (subjectFilter === 'all' || exam.subject_id === subjectFilter),
   );
+
+  // 시험지가 하나도 없는 과목까지 필터에 다 늘어놓으면 정작 쓸 수 있는 과목은 적은데도
+  // 목록이 길어져 찾기 불편하다 - 실제로 시험이 있는 과목만 골라서 보여준다.
+  const activeSubjectIds = new Set(
+    exams.filter((exam) => exam.status !== 'archived').map((exam) => exam.subject_id),
+  );
+  const usedSubjects = subjects.filter((s) => activeSubjectIds.has(s.subject_id));
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
@@ -175,32 +197,47 @@ export function Dashboard() {
       </Card>
 
       <div className="animate-fade-in-up mt-9" style={{ animationDelay: '60ms' }}>
-        <h2 className="text-sm font-bold text-ink">시험 목록</h2>
-
-        {exams.length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            <button
-              onClick={() => setSubjectFilter('all')}
-              className={`rounded-full px-3 py-1 text-xs font-bold transition-colors duration-150 ${
-                subjectFilter === 'all' ? 'bg-accent text-white' : 'bg-surface-container text-ink-soft hover:bg-line'
-              }`}
-            >
-              전체
-            </button>
-            {subjects.map((s) => (
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-sm font-bold text-ink">시험 목록</h2>
+          {!selectMode ? (
+            exams.length > 0 && (
               <button
-                key={s.subject_id}
-                onClick={() => setSubjectFilter(s.subject_id)}
-                className={`rounded-full px-3 py-1 text-xs font-bold transition-colors duration-150 ${
-                  subjectFilter === s.subject_id
-                    ? 'bg-accent text-white'
-                    : 'bg-surface-container text-ink-soft hover:bg-line'
-                }`}
+                className="text-xs font-bold text-ink-soft hover:text-ink"
+                onClick={() => setSelectMode(true)}
               >
-                {displaySubjectName(s.subject_name)}
+                선택 삭제
               </button>
+            )
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-ink-soft">{selectedIds.size}개 선택됨</span>
+              <button className="text-xs font-bold text-ink-soft hover:text-ink" onClick={exitSelectMode}>
+                취소
+              </button>
+              <Button
+                variant="danger"
+                disabled={selectedIds.size === 0 || bulkDeleting}
+                onClick={bulkDelete}
+              >
+                {bulkDeleting ? '삭제 중...' : `삭제 (${selectedIds.size})`}
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {usedSubjects.length > 1 && (
+          <select
+            className="mt-3 rounded-xl border border-line bg-bg px-3 py-1.5 text-xs font-bold text-ink outline-none focus:border-accent"
+            value={subjectFilter}
+            onChange={(e) => setSubjectFilter(e.target.value)}
+          >
+            <option value="all">전체 교과</option>
+            {usedSubjects.map((s) => (
+              <option key={s.subject_id} value={s.subject_id}>
+                {displaySubjectName(s.subject_name)}
+              </option>
             ))}
-          </div>
+          </select>
         )}
 
         {exams.length === 0 ? (
@@ -209,44 +246,57 @@ export function Dashboard() {
           <p className="mt-3 text-sm text-ink-soft">이 교과로 만든 시험이 없습니다.</p>
         ) : (
           <div className="mt-3 flex flex-col gap-2">
-            {visibleExams.map((exam, i) => (
-              <Card
-                key={exam.id}
-                className="animate-fade-in-up flex cursor-pointer items-center justify-between transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/60 hover:shadow-[0_4px_12px_rgba(16,24,40,0.08)]"
-                style={{ animationDelay: `${Math.min(i, 12) * 30}ms` }}
-                onClick={() => navigate(`/exams/${exam.id}`)}
-              >
-                <div>
-                  <p className="text-sm font-bold text-ink">{exam.title}</p>
-                  <p className="mt-0.5 text-xs text-ink-soft">
-                    {GRADE_LABEL[exam.grade_cluster] || exam.grade_cluster} · {exam.subject_id} ·{' '}
-                    {Math.round(exam.time_limit_sec / 60)}분 ·{' '}
-                    {exam.mode === 'paper_marking' ? '종이+마킹' : '온라인'}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {exam.status === 'finalized' && (
-                    <button
-                      className="text-xs font-bold text-accent hover:underline"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigate(`/exams/${exam.id}/results`);
-                      }}
-                    >
-                      결과 보기
-                    </button>
-                  )}
-                  <Badge tone={STATUS_BADGE[exam.status].tone}>{STATUS_BADGE[exam.status].label}</Badge>
-                  <button
-                    className="text-xs font-bold text-ink-soft hover:text-danger disabled:opacity-50"
-                    disabled={deletingId === exam.id}
-                    onClick={(e) => deleteExam(exam, e)}
-                  >
-                    삭제
-                  </button>
-                </div>
-              </Card>
-            ))}
+            {visibleExams.map((exam, i) => {
+              const selected = selectedIds.has(exam.id);
+              return (
+                <Card
+                  key={exam.id}
+                  className={`animate-fade-in-up flex cursor-pointer items-center justify-between transition-all duration-200 ${
+                    selectMode
+                      ? selected
+                        ? 'border-accent bg-accent-soft'
+                        : 'hover:border-accent/40'
+                      : 'hover:-translate-y-0.5 hover:border-accent/60 hover:shadow-[0_4px_12px_rgba(16,24,40,0.08)]'
+                  }`}
+                  style={{ animationDelay: `${Math.min(i, 12) * 30}ms` }}
+                  onClick={() => (selectMode ? toggleSelect(exam.id) : navigate(`/exams/${exam.id}`))}
+                >
+                  <div className="flex items-center gap-3">
+                    {selectMode && (
+                      <span
+                        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 text-[11px] font-bold transition-colors duration-150 ${
+                          selected ? 'border-accent bg-accent text-white' : 'border-line text-transparent'
+                        }`}
+                      >
+                        ✓
+                      </span>
+                    )}
+                    <div>
+                      <p className="text-sm font-bold text-ink">{exam.title}</p>
+                      <p className="mt-0.5 text-xs text-ink-soft">
+                        {GRADE_LABEL[exam.grade_cluster] || exam.grade_cluster} · {exam.subject_id} ·{' '}
+                        {Math.round(exam.time_limit_sec / 60)}분 ·{' '}
+                        {exam.mode === 'paper_marking' ? '종이+마킹' : '온라인'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!selectMode && exam.status === 'finalized' && (
+                      <button
+                        className="text-xs font-bold text-accent hover:underline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/exams/${exam.id}/results`);
+                        }}
+                      >
+                        결과 보기
+                      </button>
+                    )}
+                    <Badge tone={STATUS_BADGE[exam.status].tone}>{STATUS_BADGE[exam.status].label}</Badge>
+                  </div>
+                </Card>
+              );
+            })}
           </div>
         )}
       </div>

@@ -8,8 +8,9 @@ import { Server as SocketIOServer } from 'socket.io';
 
 import { config } from './config.js';
 import { getLanIp, getLanIpCandidates } from './lib/lanIp.js';
-import { setIO, monitorRoom } from './lib/realtime.js';
+import { setIO, monitorRoom, emitExamMonitorUpdate } from './lib/realtime.js';
 import './db/index.js'; // DB 연결 + 스키마 초기화 (부작용으로 초기화됨)
+import * as repo from './db/repo.js';
 import { examsRouter } from './routes/exams.js';
 import { aiRouter } from './routes/ai.js';
 import { sessionsRouter } from './routes/sessions.js';
@@ -98,6 +99,29 @@ io.on('connection', (socket) => {
   });
   socket.on('disconnect', () => {});
 });
+
+// 학생 기기가 꺼지거나 인터넷이 끊겨서 시간 초과 시 자동 제출 요청이 서버까지 오지
+// 못하면, 그 세션은 제한시간이 한참 지나도 '응시중'으로 영영 남는다(교사가 직접 강제
+// 종료하거나 학생이 다시 접속해야만 정리됨). 30초마다 훑어서 그런 세션을 서버가 스스로
+// 시간 초과 제출 처리한다.
+const SWEEP_INTERVAL_MS = 30_000;
+async function sweepTimedOutSessions() {
+  try {
+    const rows = await repo.getTimedOutInProgressSessions();
+    const affectedExamIds = new Set();
+    for (const row of rows) {
+      await repo.finalizeSession(row.session_id);
+      affectedExamIds.add(row.exam_id);
+    }
+    for (const examId of affectedExamIds) {
+      emitExamMonitorUpdate(examId);
+    }
+  } catch (err) {
+    console.error('[시간 초과 세션 정리] 오류:', err);
+  }
+}
+setInterval(sweepTimedOutSessions, SWEEP_INTERVAL_MS);
+sweepTimedOutSessions();
 
 // listen()이 실패하면(주로 이미 다른 OMR 프로그램 창이 떠 있어서 포트가 사용 중일 때)
 // 기본적으로 알아보기 힘든 스택 트레이스와 함께 그냥 죽어버린다. 원인을 바로 알 수 있게

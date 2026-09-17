@@ -26,16 +26,19 @@ interface PenCanvasProps {
   tool: PenTool;
   color: string;
   baseWidth?: number;
+  /** S-Pen이 없는 학생을 위한 손가락 필기 모드 - true면 touch도 필기로 인정한다(팜 리젝션 없음). */
+  allowTouch?: boolean;
   onStrokesChange?: (hasStrokes: boolean) => void;
 }
 
 // 갤럭시 크롬북2 360의 와콤 S-Pen(EMR) 필기 최적화 캔버스.
 // - Pointer Events + pointerType 필터링으로 손바닥/터치는 무시(팜 리젝션), 펜만 그린다.
+//   단, allowTouch가 켜져 있으면(펜이 없는 학생용 손가락 필기 모드) touch도 필기로 받는다.
 // - getCoalescedEvents로 rAF(60Hz)보다 촘촘한 EMR 샘플(~200Hz) 좌표를 모두 반영해 선이 끊기지 않게 한다.
 // - 필압(pressure)에 따라 선 굵기를 구간별로 바꿔 손글씨 느낌을 살린다.
 // - 펜 뒤쪽 지우개(버튼 5)를 대면 도구 설정과 무관하게 자동으로 지우개로 전환된다.
 export const PenCanvas = forwardRef<PenCanvasHandle, PenCanvasProps>(function PenCanvas(
-  { active, tool, color, baseWidth = 2.6, onStrokesChange },
+  { active, tool, color, baseWidth = 2.6, allowTouch = false, onStrokesChange },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -151,6 +154,13 @@ export const PenCanvas = forwardRef<PenCanvasHandle, PenCanvasProps>(function Pe
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    // 팜 리젝션: 기본은 S-Pen(pointerType 'pen')만 필기로 인정해 손바닥 터치를 무시한다.
+    // allowTouch(손가락 필기 모드)가 켜져 있으면 - 펜이 없는 학생을 위해 - touch도 인정한다.
+    // 이 모드에선 손바닥도 필기로 잡히지만, 애초에 펜이 없어 팜 리젝션이 필요 없는 상황이다.
+    function isDrawingPointer(e: PointerEvent) {
+      return e.pointerType === 'pen' || (allowTouch && e.pointerType === 'touch');
+    }
+
     function resolveTool(e: PointerEvent): PenTool {
       // 펜 뒤쪽 지우개(버튼)를 대면 e.button === 5 (buttons에 0x20 비트) - 도구 설정과
       // 무관하게 즉시 지우개로 취급한다. 그 외엔 현재 선택된 도구를 따른다.
@@ -159,8 +169,7 @@ export const PenCanvas = forwardRef<PenCanvasHandle, PenCanvasProps>(function Pe
     }
 
     function onPointerDown(e: PointerEvent) {
-      // 팜 리젝션: S-Pen(pointerType 'pen')만 필기로 인정한다. 손바닥/손가락 터치는 무시.
-      if (e.pointerType !== 'pen') return;
+      if (!isDrawingPointer(e)) return;
       e.preventDefault();
       canvas!.setPointerCapture(e.pointerId);
 
@@ -177,7 +186,7 @@ export const PenCanvas = forwardRef<PenCanvasHandle, PenCanvasProps>(function Pe
 
     function onPointerMove(e: PointerEvent) {
       const stroke = activeStrokeRef.current;
-      if (!stroke || e.pointerType !== 'pen') return;
+      if (!stroke || !isDrawingPointer(e)) return;
       e.preventDefault();
 
       const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
@@ -190,7 +199,7 @@ export const PenCanvas = forwardRef<PenCanvasHandle, PenCanvasProps>(function Pe
 
     function endStroke(e: PointerEvent) {
       const stroke = activeStrokeRef.current;
-      if (!stroke || e.pointerType !== 'pen') return;
+      if (!stroke || !isDrawingPointer(e)) return;
       activeStrokeRef.current = null;
       if (stroke.points.length > 0) {
         strokesRef.current.push(stroke);
@@ -210,7 +219,7 @@ export const PenCanvas = forwardRef<PenCanvasHandle, PenCanvasProps>(function Pe
       canvas.removeEventListener('pointercancel', endStroke);
       canvas.removeEventListener('pointerleave', endStroke);
     };
-  }, [tool, color, baseWidth, onStrokesChange]);
+  }, [tool, color, baseWidth, allowTouch, onStrokesChange]);
 
   return (
     // 컨테이너 자체는 항상 pointer-events:none - 내용이 없는 투명 레이어라도 기본값(auto)이면

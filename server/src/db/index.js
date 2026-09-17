@@ -33,8 +33,17 @@ const sessionColumns = db.prepare('PRAGMA table_info(exam_sessions)').all().map(
 if (!sessionColumns.includes('extra_time_sec')) {
   db.exec('ALTER TABLE exam_sessions ADD COLUMN extra_time_sec INTEGER NOT NULL DEFAULT 0');
 }
+if (!sessionColumns.includes('allow_rejoin')) {
+  db.exec('ALTER TABLE exam_sessions ADD COLUMN allow_rejoin INTEGER NOT NULL DEFAULT 0');
+}
+if (!sessionColumns.includes('disqualify_reason')) {
+  db.exec('ALTER TABLE exam_sessions ADD COLUMN disqualify_reason TEXT');
+}
 
 const questionColumns = db.prepare('PRAGMA table_info(questions)').all().map((c) => c.name);
 if (!questionColumns.includes('prompt_image_path')) {
   db.exec('ALTER TABLE questions ADD COLUMN prompt_image_path TEXT');
+}
+if (!questionColumns.includes('ai_standard_candidates')) {
+  db.exec('ALTER TABLE questions ADD COLUMN ai_standard_candidates TEXT');
 }

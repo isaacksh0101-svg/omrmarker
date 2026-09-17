@@ -7,16 +7,16 @@ import type {
   PendingQuestionsResponse,
   PublicExam,
   PublicQuestion,
-  WarningResponse,
 } from '../../types';
 import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
 import { Badge } from '../../components/Badge';
 import { PenCanvas, type PenCanvasHandle, type PenTool } from '../../components/PenCanvas';
 import { MathText } from '../../components/MathText';
-import { IconEraser, IconPen, IconTrash, IconUndo } from '../../components/icons';
+import { IconEraser, IconHand, IconPen, IconTrash, IconUndo } from '../../components/icons';
 
 const PEN_COLORS = ['#1b1c22', '#f04438', '#3258ce'];
+const FINGER_MODE_KEY = 'omr_finger_writing';
 
 function formatTime(sec: number) {
   const m = Math.floor(sec / 60);
@@ -24,11 +24,66 @@ function formatTime(sec: number) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+// 대기 화면과 시작 게이트 화면 양쪽에 똑같이 띄운다 - 전체화면을 지원하지 않는 기기
+// (예: iOS Safari)는 시작 게이트 화면 자체를 건너뛰므로, 대기 화면에도 반드시 같은
+// 경고가 보여야 모든 학생이 시작 전에 한 번은 보게 된다.
+function AntiCheatNotice() {
+  return (
+    <div className="mt-6 max-w-sm rounded-xl border border-danger/30 bg-danger/5 px-4 py-3 text-left">
+      <p className="text-sm font-bold text-danger">시험 중 다른 화면으로 이동하면 안 됩니다</p>
+      <p className="mt-1 text-xs text-ink-soft">
+        탭 전환, 창 전환, 최소화 등으로 화면을 벗어나는 순간 그 즉시 시험이 강제로 종료됩니다. 실수로
+        종료됐다면 선생님께 바로 말씀해주세요.
+      </p>
+    </div>
+  );
+}
+
+// 전체화면 API - 사파리(구버전)는 webkit 접두사를 쓰므로 감지/호출을 한 곳에 모아둔다.
+// 시험 중 전체화면을 벗어나는 것(alt-tab, 창 전환, 최소화 등 대부분의 "다른 화면으로 이동"
+// 동작은 브라우저가 자동으로 전체화면을 해제시킨다)을 이탈 감지의 주 신호로 쓴다 - blur나
+// visibilitychange보다 타이밍이 훨씬 더 명확하고 안정적이다(중복 카운트 버그의 원인이었던
+// "돌아왔는지 애매한 타이밍" 문제 자체가 없다).
+function isFullscreenSupported() {
+  const doc = document as Document & { webkitFullscreenEnabled?: boolean };
+  return !!(doc.fullscreenEnabled || doc.webkitFullscreenEnabled);
+}
+function requestFullscreenCompat(el: HTMLElement) {
+  const anyEl = el as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> };
+  if (el.requestFullscreen) return el.requestFullscreen();
+  if (anyEl.webkitRequestFullscreen) return anyEl.webkitRequestFullscreen();
+  return Promise.reject(new Error('fullscreen not supported'));
+}
+function getFullscreenElementCompat() {
+  const doc = document as Document & { webkitFullscreenElement?: Element | null };
+  return doc.fullscreenElement || doc.webkitFullscreenElement || null;
+}
+function addFullscreenChangeListener(fn: () => void) {
+  document.addEventListener('fullscreenchange', fn);
+  document.addEventListener('webkitfullscreenchange', fn);
+}
+function removeFullscreenChangeListener(fn: () => void) {
+  document.removeEventListener('fullscreenchange', fn);
+  document.removeEventListener('webkitfullscreenchange', fn);
+}
+
 export function TakeExam() {
   const { examId } = useParams();
   const navigate = useNavigate();
   const id = Number(examId);
   const sessionId = Number(localStorage.getItem(`omr_session_${id}`));
+
+  // 한 세션 안에서 이탈 감지로 인한 강제 제출 요청을 중복으로 여러 번 보내지 않기 위한
+  // 가드 - blur와 visibilitychange, fullscreenchange가 같은 탭 전환에 대해 거의 동시에
+  // 여러 번 발동할 수 있다. 세션이 다시 in_progress로 바뀔 때(교사가 되살렸을 때) 초기화된다.
+  const disqualifyingRef = useRef(false);
+  // 이번 응시에서 전체화면 진입에 성공해 전체화면 이탈을 이탈 신호로 같이 쓰고 있는지.
+  const fullscreenArmedRef = useRef(false);
+
+  // 전체화면 진입 제스처(브라우저 정책상 클릭 등 실제 사용자 동작이 있어야만 전체화면
+  // 요청이 허용된다)를 거쳤는지 - 응시가 갑자기 자동으로 시작돼도(교사가 원격으로 시작
+  // 버튼을 누름) 학생 쪽엔 클릭 한 번이 필요해서 이 게이트를 둔다.
+  const [examStarted, setExamStarted] = useState(false);
 
   const [exam, setExam] = useState<PublicExam | null>(null);
   const [session, setSession] = useState<ExamSession | null>(null);
@@ -45,6 +100,9 @@ export function TakeExam() {
   const [penTool, setPenTool] = useState<PenTool>('pen');
   const [penColor, setPenColor] = useState(PEN_COLORS[0]);
   const [hasStrokes, setHasStrokes] = useState(false);
+  // S-Pen이 없는 학생을 위한 손가락 필기 모드 - 이 기기(브라우저)에 저장해두고, 다음
+  // 문항/시험에서도 매번 다시 켤 필요 없게 한다.
+  const [fingerMode, setFingerMode] = useState(() => localStorage.getItem(FINGER_MODE_KEY) === '1');
   const penRef = useRef<PenCanvasHandle>(null);
 
   const reloadSession = useCallback(async () => {
@@ -116,10 +174,22 @@ export function TakeExam() {
   }, [session?.status, reloadSession]);
 
   // 교사가 시험 감독 화면에서 이 학생에게만 시간을 더 줬을 수 있다(extra_time_sec) -
-  // 카운트다운 마감 시각에 바로 반영되도록 주기적으로 세션을 다시 불러온다.
+  // 카운트다운 마감 시각에 바로 반영되도록 주기적으로 세션을 다시 불러온다. 강제 종료된
+  // 뒤에도 계속 불러오는 이유는, 교사가 "되살리기"를 누르면 상태가 다시 in_progress로
+  // 바뀌는데 그걸 학생 화면이 스스로 알아챌 방법이 이 폴링 말고는 없기 때문이다(그렇지
+  // 않으면 종료 화면에 멈춘 채로 새로고침해야만 다시 이어서 풀 수 있게 된다).
   useEffect(() => {
-    if (session?.status !== 'in_progress') return;
-    const interval = setInterval(reloadSession, 5000);
+    const wasForceSubmitted = session?.status === 'force_submitted';
+    if (!wasForceSubmitted && session?.status !== 'in_progress') return;
+    const interval = setInterval(async () => {
+      const updated = await reloadSession();
+      if (wasForceSubmitted && updated.status === 'in_progress') {
+        // 되살아났다 - 전체화면/이탈 감지 상태를 처음부터 다시 잡도록 시작 게이트로 되돌린다.
+        setExamStarted(false);
+        disqualifyingRef.current = false;
+        fullscreenArmedRef.current = false;
+      }
+    }, 5000);
     return () => clearInterval(interval);
   }, [session?.status, reloadSession]);
 
@@ -141,68 +211,70 @@ export function TakeExam() {
     return () => clearInterval(interval);
   }, [session, exam, id, sessionId, reloadSession]);
 
-  // 응시 중 다른 화면으로 이탈하면(탭 전환, 창 최소화 등) 서버에 기록하고 학생에게도
-  // 경고 팝업을 띄운다. 정해진 횟수(기본 3회)를 넘기면 서버가 시험을 강제 제출 처리하므로,
-  // 그 결과를 받아 화면도 바로 종료 상태로 전환한다.
-  //
-  // 안드로이드 크롬 등 모바일 브라우저는 화면이 안 보이는 동안(document.hidden) 뜬
-  // alert()를 아예 무시하거나 띄우지 못한다 - 다른 앱으로 전환한 "그 순간"에 경고를
-  // 기록하면서 동시에 alert()를 호출하면, 기록은 서버에 정상적으로 남지만 팝업은 학생
-  // 눈에 보이지 않은 채 사라져버렸다. 그래서 팝업 문구는 일단 담아두고, 화면/창이 실제로
-  // 다시 보이는 시점(visibilitychange로 visible이 되거나 window focus)에 띄운다.
+  // 응시 중 다른 화면으로 이탈하면(탭 전환, 창 최소화, 전체화면 해제 등) 즉시 지금까지
+  // 낸 답만으로 시험을 강제 제출 처리한다 - 경고를 몇 번 봐주는 방식은 "나가서 답을
+  // 찾아보고 돌아오면 그만"인 허점이 있어서, 첫 이탈부터 바로 종료시키는 쪽으로 바꿨다.
+  // 억울하게(알림창, 실수 등) 종료된 경우엔 교사에게 소명해서 "되살리기"로 이어서 풀면 된다.
   useEffect(() => {
     if (session?.status !== 'in_progress') return;
+    disqualifyingRef.current = false;
 
-    let pendingAlert: string | null = null;
-    function flushPendingAlert() {
-      if (pendingAlert) {
-        const msg = pendingAlert;
-        pendingAlert = null;
-        alert(msg);
-      }
-    }
-
-    async function report(type: 'visibility_hidden' | 'window_blur') {
+    async function disqualify(type: 'visibility_hidden' | 'window_blur') {
+      // blur/visibilitychange/fullscreenchange가 같은 탭 전환 한 번에 여러 번 겹쳐 뜰 수
+      // 있다 - 한 번만 요청을 보내면 충분하다(서버도 in_progress가 아니면 무시하므로
+      // 중복 요청 자체는 안전하지만, 화면 전환을 굳이 여러 번 반복할 필요는 없다).
+      if (disqualifyingRef.current) return;
+      disqualifyingRef.current = true;
       try {
-        const res = await api.post<WarningResponse>(`/exams/${id}/sessions/${sessionId}/warning`, { type });
-        if (!res.counted) return;
-        if (res.disqualified) {
-          pendingAlert = `화면 이탈이 ${res.warning_count}회 감지되어 시험이 강제 종료되었습니다.`;
-          await reloadSession();
-          setCurrent(null);
-          setPending(null);
-        } else {
-          const remaining = res.max_warnings - res.warning_count;
-          pendingAlert = `다른 화면으로 이동한 것이 감지되었습니다. (${res.warning_count}/${res.max_warnings}회)\n${remaining}회 더 감지되면 시험이 강제 종료됩니다.`;
-        }
-        if (!document.hidden) flushPendingAlert();
+        await api.post(`/exams/${id}/sessions/${sessionId}/warning`, { type });
       } catch {
-        // 네트워크 오류 등은 무시 - 경고 기록은 부가 기능이라 시험 진행을 막지 않는다.
+        // 네트워크 오류 등은 무시 - 아래 reloadSession이 최신 상태를 다시 가져온다.
       }
+      await reloadSession();
+      setCurrent(null);
+      setPending(null);
     }
+
     function onVisibilityChange() {
-      if (document.hidden) {
-        report('visibility_hidden');
-      } else {
-        flushPendingAlert();
-      }
+      if (document.hidden) disqualify('visibility_hidden');
     }
     function onBlur() {
-      report('window_blur');
+      disqualify('window_blur');
     }
-    function onFocus() {
-      flushPendingAlert();
+    // 전체화면 모드로 응시 중이면(fullscreenArmedRef), 전체화면이 풀리는 순간도 이탈로
+    // 본다 - 탭 전환/창 전환/최소화 대부분이 전체화면도 같이 해제시키므로 blur보다 더
+    // 이르고 확실한 신호다. 서버 스키마에 별도 이벤트 타입을 추가하는 대신 기존
+    // 'window_blur'로 기록한다(의미상 크게 다르지 않고, DB 마이그레이션을 피할 수 있다).
+    function onFullscreenChange() {
+      if (fullscreenArmedRef.current && !getFullscreenElementCompat()) disqualify('window_blur');
     }
 
     document.addEventListener('visibilitychange', onVisibilityChange);
     window.addEventListener('blur', onBlur);
-    window.addEventListener('focus', onFocus);
+    addFullscreenChangeListener(onFullscreenChange);
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('blur', onBlur);
-      window.removeEventListener('focus', onFocus);
+      removeFullscreenChangeListener(onFullscreenChange);
     };
   }, [session?.status, id, sessionId, reloadSession]);
+
+  // 시험이 시작되면(교사가 원격으로 시작시켜도) 바로 문제를 보여주지 않고, 학생이 직접
+  // 누르게 해서 그 클릭을 전체화면 진입 제스처로 쓴다 - 브라우저는 사용자 동작 없이
+  // 자동으로 전체화면에 들어가는 걸 허용하지 않는다. 전체화면을 지원하지 않는 환경
+  // (예: iOS Safari)에서는 이 게이트 없이 바로 진행하고, 이탈 감지는 기존 방식(blur/
+  // visibilitychange)에만 의존한다.
+  async function startExam() {
+    if (isFullscreenSupported()) {
+      try {
+        await requestFullscreenCompat(document.documentElement);
+        fullscreenArmedRef.current = true;
+      } catch {
+        fullscreenArmedRef.current = false;
+      }
+    }
+    setExamStarted(true);
+  }
 
   // 응답 하나를 서버에 반영한 뒤 화면을 어디로 옮길지는 서버 응답만 보고 정한다 - 1차
   // 진행 중 문항이든, 건너뛴 뒤 복습 화면에서 뒤늦게 답한 문항이든 이 한 함수로 처리된다.
@@ -229,7 +301,7 @@ export function TakeExam() {
       const result = await api.post<CurrentQuestionResponse>(`/exams/${id}/sessions/${sessionId}/answers`, body);
       await afterAnswerLikeResponse(result);
     } catch {
-      // 응답 전송 도중 화면 이탈 경고 누적으로 강제 종료됐을 수 있다 - 최신 세션
+      // 응답 전송 도중 화면 이탈이 감지돼 강제 종료됐을 수 있다 - 최신 세션
       // 상태를 다시 불러와 종료 화면으로 전환한다.
       await reloadSession();
       setCurrent(null);
@@ -289,6 +361,7 @@ export function TakeExam() {
           <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
           <p className="text-base font-bold text-ink-soft">선생님이 시험을 시작하면 자동으로 시작됩니다</p>
         </div>
+        <AntiCheatNotice />
       </div>
     );
   }
@@ -304,7 +377,11 @@ export function TakeExam() {
           {session.status === 'force_submitted' ? '시험이 강제 종료되었습니다' : '제출 완료'}
         </h1>
         {session.status === 'force_submitted' && (
-          <p className="mt-1 text-sm text-ink-soft">화면 이탈이 반복되어 자동으로 제출되었습니다.</p>
+          <p className="mt-1 text-sm text-ink-soft">
+            {session.disqualify_reason === 'screen_leave'
+              ? '다른 화면으로 이동한 것이 감지되어 자동으로 제출되었습니다. 실수였다면 선생님께 말씀해주세요.'
+              : '선생님이 시험을 종료했습니다.'}
+          </p>
         )}
         <Card className="mt-5">
           <p className="text-xs font-bold text-ink-soft">점수</p>
@@ -325,6 +402,23 @@ export function TakeExam() {
             </span>
           ))}
         </div>
+      </div>
+    );
+  }
+
+  // in_progress지만 아직 전체화면 진입 제스처를 거치지 않았으면(지원하는 환경에서만) 문제를
+  // 바로 보여주지 않고 시작 버튼을 먼저 누르게 한다.
+  if (session.status === 'in_progress' && !examStarted && isFullscreenSupported()) {
+    return (
+      <div className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center px-8 py-10 text-center">
+        <h1 className="text-2xl font-bold text-ink">{exam.title}</h1>
+        <p className="mt-3 text-base text-ink-soft">
+          제한시간 {Math.round(exam.time_limit_sec / 60)}분 · 총 {exam.question_count}문항
+        </p>
+        <AntiCheatNotice />
+        <Button className="mt-8 text-base" onClick={startExam}>
+          시험 시작하기
+        </Button>
       </div>
     );
   }
@@ -433,6 +527,20 @@ export function TakeExam() {
               >
                 <IconTrash className="h-4.5 w-4.5" />
               </button>
+              <button
+                aria-label="손가락 필기 모드 켜기/끄기"
+                title="펜이 없으면 손가락으로도 필기할 수 있어요"
+                onClick={() => {
+                  const next = !fingerMode;
+                  setFingerMode(next);
+                  localStorage.setItem(FINGER_MODE_KEY, next ? '1' : '0');
+                }}
+                className={`ml-1 rounded-lg p-1.5 ${
+                  fingerMode ? 'bg-accent-soft text-accent-ink' : 'text-ink-soft hover:bg-surface-container'
+                }`}
+              >
+                <IconHand className="h-4.5 w-4.5" />
+              </button>
             </>
           )}
           <button
@@ -448,51 +556,66 @@ export function TakeExam() {
       </header>
 
       <div className="relative min-h-0 flex-1">
-        <div key={q.id} className="animate-fade-in-up h-full overflow-y-auto px-6 py-8 sm:px-10">
-          <div className="mx-auto max-w-3xl">
-            {q.prompt_image_path ? (
-              <img
-                src={`/uploads/${q.prompt_image_path}`}
-                alt={`${q.order_index + 1}번 문항`}
-                className="max-w-full rounded-lg border border-line"
-              />
-            ) : q.prompt ? (
-              <p className="whitespace-pre-wrap text-xl font-bold text-ink">
-                <MathText text={q.prompt} />
-              </p>
-            ) : (
-              <p className="text-base text-ink-soft">종이 시험지의 {q.order_index + 1}번 문항을 마킹하세요.</p>
-            )}
+        <div key={q.id} className="animate-fade-in-up h-full overflow-y-auto">
+          {/* min-h를 화면 높이보다 더 크게 잡아서, 문제가 화면 위쪽 절반 정도만 차지하고
+              나머지(오른쪽/아래쪽)는 필기용 여백으로 남도록 한다. 스크롤을 내리면 그만큼
+              더 넓은 빈 연습장이 이어서 나온다. */}
+          <div className="relative min-h-[calc(100%+100vh)] px-6 py-8 sm:px-10">
+            <div className="max-w-md">
+              {q.prompt_image_path ? (
+                <img
+                  src={`/uploads/${q.prompt_image_path}`}
+                  alt={`${q.order_index + 1}번 문항`}
+                  className="max-w-full rounded-lg border border-line"
+                />
+              ) : q.prompt ? (
+                <p className="whitespace-pre-wrap text-base font-bold text-ink">
+                  <MathText text={q.prompt} />
+                </p>
+              ) : (
+                <p className="text-base text-ink-soft">종이 시험지의 {q.order_index + 1}번 문항을 마킹하세요.</p>
+              )}
 
-            {q.type === 'mc' && (
-              <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {q.choices.map((c) => (
-                  <button
-                    key={c.id}
-                    className={`rounded-xl border px-4 py-3.5 text-left text-base transition-all duration-150 ${
-                      selectedChoice === c.id
-                        ? 'border-accent bg-accent-soft text-accent-ink'
-                        : 'border-line bg-panel text-ink hover:border-accent/50'
-                    }`}
-                    onClick={() => setSelectedChoice(c.id)}
-                  >
-                    <MathText text={c.text} />
-                  </button>
-                ))}
-              </div>
-            )}
+              {/* 문제 이미지에 보기(①②③④⑤)가 이미 포함돼 있으면(AI가 보기까지 통째로 잘라준
+                  경우) 보기 텍스트를 따로 또 보여줄 필요가 없다 - 번호 토글은 아래 하단 바에
+                  단답형 정답 입력칸과 같은 자리에 둔다(교사 피드백: 문항 종류가 달라도 "정답을
+                  입력하는 자리"는 같은 위치여야 한다). 이미지가 없는 문항(옛날에 텍스트로만
+                  추출됐거나, 이미지 자르기가 실패한 경우)만 여기 본문 쪽에 보기 텍스트 버튼을
+                  그대로 보여준다. */}
+              {q.type === 'mc' && !q.prompt_image_path && (
+                <div className="mt-4 flex flex-col gap-2">
+                  {q.choices.map((c) => (
+                    <button
+                      key={c.id}
+                      className={`rounded-xl border px-3.5 py-2.5 text-left text-sm transition-all duration-150 ${
+                        selectedChoice === c.id
+                          ? 'border-accent bg-accent-soft text-accent-ink'
+                          : 'border-line bg-panel text-ink hover:border-accent/50'
+                      }`}
+                      onClick={() => setSelectedChoice(c.id)}
+                    >
+                      <MathText text={c.text} />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 필기는 문제/선택지 영역을 포함한 연습장 전체 위에 덮인다 - 켜져 있는 동안엔
+                기본적으로 S-Pen 입력만 받고(팜 리젝션) 손가락은 무시하지만, 손가락 필기
+                모드(fingerMode)가 켜져 있으면 펜이 없는 학생을 위해 손가락도 필기로 받는다.
+                다시 끄면 원래대로 조작 가능. 스크롤 컨테이너 안에 함께 있어서 필기도
+                문제와 같이 스크롤된다. */}
+            <PenCanvas
+              ref={penRef}
+              active={penActive}
+              tool={penTool}
+              color={penColor}
+              allowTouch={fingerMode}
+              onStrokesChange={setHasStrokes}
+            />
           </div>
         </div>
-
-        {/* 필기는 이 문항 영역 위에만 덮인다 - 켜져 있는 동안엔 S-Pen 입력만 받고(팜 리젝션),
-            아래 선택지 등은 손가락으로 건드려도 반응하지 않는다. 다시 끄면 원래대로 조작 가능. */}
-        <PenCanvas
-          ref={penRef}
-          active={penActive}
-          tool={penTool}
-          color={penColor}
-          onStrokesChange={setHasStrokes}
-        />
       </div>
 
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-line bg-panel px-4 py-3 sm:px-6">
@@ -503,6 +626,23 @@ export function TakeExam() {
             value={shortAnswer}
             onChange={(e) => setShortAnswer(e.target.value)}
           />
+        )}
+        {q.type === 'mc' && q.prompt_image_path && (
+          <div className="mr-auto flex flex-wrap gap-2">
+            {q.choices.map((c, i) => (
+              <button
+                key={c.id}
+                className={`h-11 w-11 rounded-full border text-base font-bold transition-all duration-150 ${
+                  selectedChoice === c.id
+                    ? 'border-accent bg-accent-soft text-accent-ink'
+                    : 'border-line bg-panel text-ink hover:border-accent/50'
+                }`}
+                onClick={() => setSelectedChoice(c.id)}
+              >
+                {i + 1}
+              </button>
+            ))}
+          </div>
         )}
         {isReview ? (
           <Button variant="secondary" className="text-base" disabled={submitting} onClick={loadPending}>

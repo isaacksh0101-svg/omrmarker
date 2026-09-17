@@ -143,6 +143,17 @@ export function IconTrash(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function IconHand(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M8 12.5V5.3a1.3 1.3 0 0 1 2.6 0v5.7" />
+      <path d="M10.6 10.8V4.3a1.3 1.3 0 0 1 2.6 0v6.5" />
+      <path d="M13.2 10.8V5.3a1.3 1.3 0 0 1 2.6 0v6.7" />
+      <path d="M15.8 12v-3a1.3 1.3 0 0 1 2.6 0v6.3c0 3.3-2.3 6-6.2 6-2.6 0-4-.9-5.4-2.6L4 14.4c-.6-.8-.4-1.8.4-2.3.7-.4 1.6-.3 2.2.4l1.4 1.6" />
+    </svg>
+  );
+}
+
 export function IconUndo(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>

@@ -32,6 +32,7 @@ export async function getExamFull(id) {
         ...q,
         ai_suggested: !!q.ai_suggested,
         correct_short_answers: q.correct_short_answers ? JSON.parse(q.correct_short_answers) : null,
+        ai_standard_candidates: q.ai_standard_candidates ? JSON.parse(q.ai_standard_candidates) : null,
         choices,
         standards,
       };
@@ -155,6 +156,14 @@ export async function updateQuestion(examId, qid, { prompt, points, type }) {
   );
 }
 
+export async function setPromptImage(qid, promptImagePath) {
+  await db.prepare('UPDATE questions SET prompt_image_path = ?, updated_at = ? WHERE id = ?').run(
+    promptImagePath,
+    now(),
+    qid,
+  );
+}
+
 export async function deleteQuestion(examId, qid) {
   await db.prepare('DELETE FROM questions WHERE id = ? AND exam_id = ?').run(qid, examId);
 
@@ -203,7 +212,7 @@ export async function addExtractedQuestions(examId, extractedQuestions) {
     .get(examId);
 
   const insertQuestion = db.prepare(
-    'INSERT INTO questions (exam_id, order_index, type, prompt, prompt_image_path, points, ai_suggested, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?)',
+    'INSERT INTO questions (exam_id, order_index, type, prompt, prompt_image_path, points, ai_suggested, ai_standard_candidates, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, ?)',
   );
   const insertChoice = db.prepare(
     'INSERT INTO choices (question_id, order_index, text, is_correct) VALUES (?, ?, ?, 0)',
@@ -213,27 +222,39 @@ export async function addExtractedQuestions(examId, extractedQuestions) {
   );
 
   for (const [i, q] of extractedQuestions.entries()) {
+    // AI가 관련도 순으로 나열해 준 후보들 중 실제 목록에 있는 코드만 남긴다 - 모델이
+    // 스키마를 어기고 목록 밖 코드를 내놓는 경우에 대한 방어(서비스 계층에서 한 번 걸렀지만
+    // 한 번 더 확인).
+    const validCandidates = q.suggested_standards.filter((s) => getStandardByCode(s.code));
+
     const result = await insertQuestion.run(
       examId,
       maxOrder + 1 + i,
       q.type,
       q.prompt,
       q.prompt_image_path ?? null,
+      validCandidates.length > 0 ? JSON.stringify(validCandidates) : null,
       now(),
       now(),
     );
     const questionId = result.lastInsertRowid;
 
     if (q.type === 'mc') {
-      for (const [ci, c] of q.choices.entries()) {
-        await insertChoice.run(questionId, ci, c.text);
+      // 이제 AI는 보기 내용을 텍스트로 옮기지 않는다(이미지에 이미 보기가 포함됨) - 그래서
+      // 개수를 알려주지도 않으므로 일단 5개로 만들어두고, 실제 보기 개수가 다르면 교사가
+      // 문항 편집 화면에서 개수만 +/- 조정한다.
+      for (const [ci, label] of CHOICE_DIGITS.slice(0, 5).entries()) {
+        await insertChoice.run(questionId, ci, label);
       }
     }
 
-    for (const s of q.suggested_standards) {
-      const std = getStandardByCode(s.code);
-      if (!std) continue; // 서비스 계층에서 이미 걸러지지만 한 번 더 방어
-      await insertStandard.run(questionId, s.code, std.statement, s.confidence ?? null);
+    // 후보 중 1순위(가장 관련 있다고 판단한 것)만 자동으로 태그해둔다 - 나머지는
+    // ai_standard_candidates로만 남겨서 교사가 검토용으로 참고하게 한다. 교사가 다른 후보가
+    // 더 맞다고 판단하면 성취기준 편집 UI에서 자유롭게 바꿀 수 있다.
+    const top = validCandidates[0];
+    if (top) {
+      const std = getStandardByCode(top.code);
+      await insertStandard.run(questionId, top.code, std.statement, top.confidence ?? null);
     }
   }
 }
@@ -278,6 +299,11 @@ export async function createSession(examId, rollNumber) {
   return getSession(result.lastInsertRowid);
 }
 
+// 교사가 "실시간 감독"에서 재참여를 허용해줬을 때(true)/그 허용을 한 번 소진했을 때(false) 쓴다.
+export async function setAllowRejoin(sessionId, allow) {
+  await db.prepare('UPDATE exam_sessions SET allow_rejoin = ? WHERE id = ?').run(allow ? 1 : 0, sessionId);
+}
+
 export async function startSession(sessionId) {
   await db
     .prepare("UPDATE exam_sessions SET status = 'in_progress', started_at = ? WHERE id = ?")
@@ -311,9 +337,41 @@ export async function endAllActiveSessions(examId) {
     .prepare("SELECT id FROM exam_sessions WHERE exam_id = ? AND status IN ('joined', 'in_progress')")
     .all(examId);
   for (const row of rows) {
-    await finalizeSession(row.id, 'force_submitted');
+    await finalizeSession(row.id, 'force_submitted', 'teacher_manual');
   }
   return rows.length;
+}
+
+// "시험 전체 종료"로 한 번에 강제 제출된 학생들을 다시 응시 중으로 한 번에 되돌린다.
+// 개별 revive와 동일하게, 이미 정상적으로 스스로 제출한(submitted) 학생은 건드리지 않는다.
+export async function reviveAllForceSubmittedSessions(examId) {
+  const rows = await db
+    .prepare("SELECT id FROM exam_sessions WHERE exam_id = ? AND status = 'force_submitted'")
+    .all(examId);
+  for (const row of rows) {
+    await reviveSession(row.id);
+  }
+  return rows.length;
+}
+
+// 제한시간이 지났는데도 응시 중(in_progress)으로 남아있는 세션을 주기적으로 정리하기
+// 위한 조회. 학생 기기가 꺼지거나 끊겨서 자동 제출 요청이 서버에 끝내 도달하지 못하면
+// 이 상태로 무한정 남으므로(감독 화면엔 "응시중"으로 계속 보임), 서버가 스스로 훑어서
+// 정리해야 한다 - index.js의 주기 작업(sweep)에서 사용.
+export async function getTimedOutInProgressSessions() {
+  const rows = await db
+    .prepare(
+      `SELECT es.id AS session_id, es.exam_id, es.started_at, es.extra_time_sec, e.time_limit_sec
+       FROM exam_sessions es
+       JOIN exams e ON e.id = es.exam_id
+       WHERE es.status = 'in_progress' AND es.started_at IS NOT NULL`,
+    )
+    .all();
+  const nowMs = Date.now();
+  return rows.filter((row) => {
+    const deadline = new Date(row.started_at).getTime() + (row.time_limit_sec + (row.extra_time_sec ?? 0)) * 1000;
+    return nowMs > deadline;
+  });
 }
 
 export async function getSessionAnswerSummary(sessionId) {
@@ -399,41 +457,33 @@ export async function giveUpAnswer(sessionId, questionId, answeredAt) {
   return true;
 }
 
-// 화면 이탈/포커스 아웃 이벤트를 기록한다. 짧은 시간 안에 연달아 들어오는 이벤트
-// (예: 탭 전환 한 번에 visibility_hidden과 window_blur가 거의 동시에 발생)는 한 번의
-// 부정행위 시도로 보고 debounceMs 안에 들어오면 카운트하지 않되, 로그 자체는 남긴다.
-export async function recordWarning(sessionId, type, debounceMs, maxWarnings) {
-  const session = await getSession(sessionId);
-  if (!session) return null;
+// 화면 이탈/포커스 아웃이 감지되면 그 즉시 시험을 강제 제출 처리한다("경고 3회" 같은
+// 유예 없이 첫 이탈부터 바로 종료 - 나가서 답을 찾아보고 돌아오면 그만인 허점을 막기
+// 위함). blur/visibilitychange/fullscreenchange가 같은 탭 전환 한 번에 거의 동시에 여러
+// 번 발동할 수 있어, debounceMs 안에 또 들어오면 로그만 남기고 중복 종료 처리는 하지 않는다.
+export async function recordScreenLeave(sessionId, type, debounceMs) {
+  const session = db.prepare('SELECT * FROM exam_sessions WHERE id = ?').get(sessionId);
+  if (!session || session.status !== 'in_progress') return { disqualified: false };
 
-  const last = await db
-    .prepare('SELECT occurred_at FROM warning_events WHERE session_id = ? AND counted = 1 ORDER BY id DESC LIMIT 1')
+  const last = db
+    .prepare('SELECT occurred_at FROM warning_events WHERE session_id = ? ORDER BY id DESC LIMIT 1')
     .get(sessionId);
-
   const nowIso = now();
   const withinDebounce = !!last && new Date(nowIso).getTime() - new Date(last.occurred_at).getTime() < debounceMs;
-  const counted = withinDebounce ? 0 : 1;
-  const resultingCount = session.warning_count + counted;
 
-  await db
-    .prepare(
-      'INSERT INTO warning_events (session_id, type, occurred_at, counted, resulting_warning_count) VALUES (?, ?, ?, ?, ?)',
-    )
-    .run(sessionId, type, nowIso, counted, resultingCount);
+  const resultingCount = session.warning_count + 1;
+  db.prepare(
+    'INSERT INTO warning_events (session_id, type, occurred_at, counted, resulting_warning_count) VALUES (?, ?, ?, 1, ?)',
+  ).run(sessionId, type, nowIso, resultingCount);
+  db.prepare('UPDATE exam_sessions SET warning_count = ? WHERE id = ?').run(resultingCount, sessionId);
 
-  let disqualified = false;
-  if (counted) {
-    await db.prepare('UPDATE exam_sessions SET warning_count = ? WHERE id = ?').run(resultingCount, sessionId);
-    if (resultingCount >= maxWarnings && session.status === 'in_progress') {
-      await finalizeSession(sessionId, 'force_submitted');
-      disqualified = true;
-    }
-  }
+  if (withinDebounce) return { disqualified: false };
 
-  return { warning_count: resultingCount, counted: !!counted, disqualified };
+  await finalizeSession(sessionId, 'force_submitted', 'screen_leave');
+  return { disqualified: true };
 }
 
-export async function finalizeSession(sessionId, status = 'submitted') {
+export async function finalizeSession(sessionId, status = 'submitted', reason = null) {
   const session = await getSession(sessionId);
   if (!session || session.status === 'submitted' || session.status === 'force_submitted') return;
 
@@ -448,8 +498,28 @@ export async function finalizeSession(sessionId, status = 'submitted') {
     .get(session.exam_id, sessionId);
 
   await db
-    .prepare('UPDATE exam_sessions SET status = ?, submitted_at = ?, score = ?, max_score = ? WHERE id = ?')
-    .run(status, now(), totals.score, totals.max_score, sessionId);
+    .prepare(
+      `UPDATE exam_sessions
+       SET status = ?, submitted_at = ?, score = ?, max_score = ?, disqualify_reason = ?
+       WHERE id = ?`,
+    )
+    .run(status, now(), totals.score, totals.max_score, reason, sessionId);
+}
+
+// 강제 종료된 세션을 다시 응시 중으로 되돌린다("소명"을 받아들여 이어서 풀게 해주는
+// 절차). started_at을 지금 시각으로 다시 잡아서(이미 지난 시간 때문에 되살리자마자 바로
+// 시간 초과되는 일이 없게) 처음 제한시간만큼 새로 준다 - 그전에 받은 추가시간
+// (extra_time_sec)은 그대로 유지된다. 경고 횟수도 0으로 되돌려서, 되살리자마자 사소한
+// 이탈 한 번에 다시 강제 종료되지 않게 한다.
+export async function reviveSession(sessionId) {
+  await db
+    .prepare(
+      `UPDATE exam_sessions
+       SET status = 'in_progress', started_at = ?, submitted_at = NULL, score = NULL, max_score = NULL,
+           warning_count = 0, disqualify_reason = NULL
+       WHERE id = ?`,
+    )
+    .run(now(), sessionId);
 }
 
 // ---- 교사용 시험 감독(실시간 모니터링) ----
@@ -461,7 +531,7 @@ export async function getMonitorStudents(examId) {
     .prepare(
       `SELECT r.roll_number, r.name, es.id AS session_id, es.status,
               es.current_question_index, es.warning_count, es.started_at, es.submitted_at,
-              es.score, es.max_score, es.extra_time_sec
+              es.score, es.max_score, es.extra_time_sec, es.disqualify_reason
        FROM roster r
        LEFT JOIN exam_sessions es ON es.roll_number = r.roll_number AND es.exam_id = ?
        ORDER BY r.roll_number`,
@@ -536,7 +606,7 @@ export async function getQuestionStudentBreakdown(questionId) {
        LEFT JOIN roster r ON r.roll_number = es.roll_number
        LEFT JOIN choices c ON c.id = a.selected_choice_id
        WHERE a.question_id = ? AND a.answered_at IS NOT NULL
-       ORDER BY es.roll_number`,
+       ORDER BY a.time_spent_ms IS NULL, a.time_spent_ms DESC`,
     )
     .all(questionId);
 }

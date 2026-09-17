@@ -22,6 +22,8 @@ export const config = {
     apiKey: process.env.GEMINI_API_KEY || '',
     model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
   },
+  // 화면 이탈 감지는 첫 이탈부터 즉시 강제 제출한다(경고 유예 없음). 이 값은 blur/
+  // visibilitychange/fullscreenchange가 같은 탭 전환 한 번에 겹쳐 뜰 때 로그만 중복
+  // 남지 않게 묶어주는 디바운스 창이다.
   anticheatDebounceMs: Number(process.env.ANTICHEAT_DEBOUNCE_MS) || 2000,
-  anticheatMaxWarnings: Number(process.env.ANTICHEAT_MAX_WARNINGS) || 3,
 };

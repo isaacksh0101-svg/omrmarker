@@ -4,6 +4,7 @@ import type { RosterEntry, StandardAccuracy } from '../../types';
 import { Card } from '../../components/Card';
 import { AccuracyRow } from '../../components/AccuracyRow';
 import { CompareBar } from '../../components/CompareBar';
+import { TimeUnitBars } from '../../components/TimeUnitBars';
 import { StatCard, StatCardRow } from '../../components/StatCard';
 import { PageHeader } from '../../components/PageHeader';
 import { IconChart } from '../../components/icons';
@@ -12,7 +13,11 @@ import { downloadWorkbook } from '../../lib/exportXlsx';
 
 function formatMs(ms: number | null) {
   if (ms == null) return '-';
-  return `${Math.round(ms / 1000)}초`;
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}초`;
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return sec === 0 ? `${min}분` : `${min}분 ${sec}초`;
 }
 
 interface CompareItem {
@@ -278,10 +283,9 @@ export function StandardsReport() {
                     </div>
                     <div>
                       <p className="mb-1 text-[10px] font-bold text-ink-soft">풀이 시간</p>
-                      <CompareBar
+                      <TimeUnitBars
                         classValue={item.classAvgTimeMs ?? 0}
                         myValue={item.myAvgTimeMs}
-                        maxValue={Math.max(item.classAvgTimeMs ?? 0, item.myAvgTimeMs ?? 0)}
                         formatValue={formatMs}
                       />
                     </div>

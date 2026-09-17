@@ -112,4 +112,4 @@ call npm start
 
 echo.
 echo [OMR] 프로그램이 종료되었습니다.
-pause
+timeout /t 2 >nul

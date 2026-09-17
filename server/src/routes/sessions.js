@@ -58,6 +58,20 @@ sessionsRouter.post('/:id/sessions', async (req, res) => {
   }
 
   let session = await repo.getSessionByExamAndRoll(examId, rollNumber);
+
+  // 같은 번호로 이미 참여/응시 중인 세션이 있는데 또 참여하려는 경우 - 다른 기기가
+  // 끼어들면 답 제출/이탈 경고가 뒤섞이므로 기본적으로 막는다. 원래 기기가 고장나서
+  // 다른 기기로 이어가야 하는 등 정당한 상황엔 교사가 "실시간 감독"에서 재참여를 허용해줘야
+  // 하고, 그러면 이번 한 번만 통과된다(allow_rejoin은 바로 소진).
+  if (session && (session.status === 'joined' || session.status === 'in_progress')) {
+    if (!session.allow_rejoin) {
+      return res.status(409).json({
+        error: '이미 이 번호로 참여 중인 기기가 있습니다. 다른 기기에서 이어서 하려면 선생님께 "재참여 허용"을 요청하세요.',
+      });
+    }
+    await repo.setAllowRejoin(session.id, false);
+  }
+
   if (!session) {
     session = await repo.createSession(examId, rollNumber);
     emitExamMonitorUpdate(examId);
@@ -121,6 +135,19 @@ sessionsRouter.post('/:id/end-all', async (req, res) => {
   const ended = await repo.endAllActiveSessions(examId);
   emitExamMonitorUpdate(examId);
   res.json({ ended });
+});
+
+// 교사가 '시험 감독' 화면에서 누른다. "시험 전체 종료"로 한 번에 강제 제출됐던 학생
+// 전원을 한 번에 다시 응시 중으로 되돌린다(실수로 눌렀거나, 사정을 봐서 계속 풀게
+// 해주고 싶을 때). 스스로 제출을 마친(submitted) 학생은 대상에서 제외된다.
+sessionsRouter.post('/:id/revive-all', async (req, res) => {
+  const examId = Number(req.params.id);
+  const exam = await repo.getExam(examId);
+  if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
+
+  const revived = await repo.reviveAllForceSubmittedSessions(examId);
+  emitExamMonitorUpdate(examId);
+  res.json({ revived });
 });
 
 function isTimedOut(session, exam) {
@@ -338,6 +365,10 @@ sessionsRouter.post('/:id/sessions/:sessionId/give-up', async (req, res) => {
   res.json({ done: false, reviewMode: true, pendingCount: pending });
 });
 
+// 다른 화면으로 이탈(탭 전환, 창 최소화, 전체화면 해제)이 감지되면 그 즉시 강제 제출
+// 처리한다 - 경고를 몇 번 봐주는 방식은 "나가서 답을 찾아보고 돌아오면 그만"인 허점이
+// 있어 첫 이탈부터 바로 종료시킨다. 억울하게 종료된 경우엔 교사가 감독 화면에서
+// "되살리기"로 이어서 풀게 해줄 수 있다.
 sessionsRouter.post('/:id/sessions/:sessionId/warning', async (req, res) => {
   const examId = Number(req.params.id);
   const sessionId = Number(req.params.sessionId);
@@ -345,18 +376,13 @@ sessionsRouter.post('/:id/sessions/:sessionId/warning', async (req, res) => {
   if (!session) return;
 
   if (session.status !== 'in_progress') {
-    return res.json({
-      warning_count: session.warning_count,
-      counted: false,
-      disqualified: false,
-      max_warnings: config.anticheatMaxWarnings,
-    });
+    return res.json({ disqualified: false });
   }
 
   const type = req.body.type === 'window_blur' ? 'window_blur' : 'visibility_hidden';
-  const result = await repo.recordWarning(sessionId, type, config.anticheatDebounceMs, config.anticheatMaxWarnings);
+  const result = await repo.recordScreenLeave(sessionId, type, config.anticheatDebounceMs);
   emitExamMonitorUpdate(examId);
-  res.json({ ...result, max_warnings: config.anticheatMaxWarnings });
+  res.json(result);
 });
 
 sessionsRouter.post('/:id/sessions/:sessionId/submit', async (req, res) => {
@@ -388,7 +414,6 @@ sessionsRouter.get('/:id/monitor', async (req, res) => {
       started_at: exam.started_at,
     },
     students,
-    max_warnings: config.anticheatMaxWarnings,
   });
 });
 
@@ -442,7 +467,27 @@ sessionsRouter.post('/:id/sessions/:sessionId/force-submit', async (req, res) =>
     return res.status(400).json({ error: '이미 종료된 세션입니다.' });
   }
 
-  await repo.finalizeSession(sessionId, 'force_submitted');
+  await repo.finalizeSession(sessionId, 'force_submitted', 'teacher_manual');
+  emitExamMonitorUpdate(examId);
+  res.json(await repo.getSession(sessionId));
+});
+
+// 강제 종료(경고 누적 또는 교사가 직접 종료)된 학생을 다시 응시 중 상태로 되살린다 -
+// 오탐(인터넷 끊김 등)으로 억울하게 종료됐거나, 사정을 봐서 계속 풀게 해주고 싶을 때 쓴다.
+// 시간이 이미 다 지나있으면 되살려도 바로 다시 시간 초과로 제출돼버리므로, 지금 시각을
+// 새 시작 시각으로 삼아 처음 시험 시간만큼 다시 준다(기존에 받은 추가시간은 그대로 유지).
+// 경고 횟수도 0으로 초기화한다 - 안 그러면 이미 최대치라 조그만 이탈 한 번에 바로 재종료된다.
+sessionsRouter.post('/:id/sessions/:sessionId/revive', async (req, res) => {
+  const examId = Number(req.params.id);
+  const sessionId = Number(req.params.sessionId);
+  const session = await getSessionOr404(examId, sessionId, res);
+  if (!session) return;
+
+  if (session.status !== 'force_submitted') {
+    return res.status(400).json({ error: '강제 종료된 세션만 되살릴 수 있습니다.' });
+  }
+
+  await repo.reviveSession(sessionId);
   emitExamMonitorUpdate(examId);
   res.json(await repo.getSession(sessionId));
 });
@@ -466,6 +511,20 @@ sessionsRouter.post('/:id/sessions/:sessionId/extend-time', async (req, res) => 
   const updated = await repo.addExtraTime(sessionId, seconds);
   emitExamMonitorUpdate(examId);
   res.json(updated);
+});
+
+// 같은 번호로 다른 기기가 참여를 시도했다가 막힌 경우(위 join 라우트 참고), 교사가
+// "실시간 감독"에서 이 버튼을 눌러 다음 참여 시도 한 번만 통과시켜준다 - 학생 기기가
+// 고장나서 다른 기기로 이어가야 하는 등 정당한 상황을 위한 예외 통로.
+sessionsRouter.post('/:id/sessions/:sessionId/allow-rejoin', async (req, res) => {
+  const examId = Number(req.params.id);
+  const sessionId = Number(req.params.sessionId);
+  const session = await getSessionOr404(examId, sessionId, res);
+  if (!session) return;
+
+  await repo.setAllowRejoin(sessionId, true);
+  emitExamMonitorUpdate(examId);
+  res.json(await repo.getSession(sessionId));
 });
 
 // ---- 교사용 결과 집계 ----

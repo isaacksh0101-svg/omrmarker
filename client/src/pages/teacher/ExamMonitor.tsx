@@ -8,7 +8,7 @@ import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
 import { StatCard, StatCardRow } from '../../components/StatCard';
 import { MathText } from '../../components/MathText';
-import { IconEye, IconStopCircle } from '../../components/icons';
+import { IconEye, IconStopCircle, IconUndo } from '../../components/icons';
 
 type Tone = 'neutral' | 'good' | 'warn' | 'danger';
 
@@ -22,8 +22,16 @@ const STATUS_META: Record<SessionStatus, { label: string; tone: Tone; dot: strin
 
 const NOT_JOINED_META = { label: '입장 전', tone: 'neutral' as Tone, dot: 'bg-line' };
 
-function statusMeta(status: SessionStatus | null) {
+// force_submitted면 왜 종료됐는지(교사가 직접 종료했는지, 화면 이탈이 감지돼 자동으로
+// 종료됐는지)까지 라벨에 같이 보여준다 - 학생이 "소명"하러 왔을 때 교사가 근거를 바로 볼 수 있게.
+function statusMeta(status: SessionStatus | null, disqualifyReason?: string | null) {
   if (!status) return NOT_JOINED_META;
+  if (status === 'force_submitted' && disqualifyReason === 'screen_leave') {
+    return { label: '자동 종료됨(화면 이탈 감지)', tone: 'danger' as Tone, dot: 'bg-danger' };
+  }
+  if (status === 'force_submitted' && disqualifyReason === 'teacher_manual') {
+    return { label: '강제 종료됨(교사)', tone: 'danger' as Tone, dot: 'bg-danger' };
+  }
   return STATUS_META[status];
 }
 
@@ -41,26 +49,27 @@ const EXTRA_TIME_OPTIONS = [
 function StudentCard({
   student,
   questionCount,
-  maxWarnings,
   index,
   onView,
   onForceEnd,
   onExtendTime,
+  onRevive,
 }: {
   student: MonitorStudent;
   questionCount: number;
-  maxWarnings: number;
   index: number;
   onView: () => void;
   onForceEnd: () => void;
   onExtendTime: (seconds: number) => void;
+  onRevive: () => void;
 }) {
-  const meta = statusMeta(student.status);
+  const meta = statusMeta(student.status, student.disqualify_reason);
   const canView = student.session_id != null;
   const canForceEnd = student.status === 'joined' || student.status === 'in_progress';
+  const canRevive = student.status === 'force_submitted';
   const extraTimeSec = student.extra_time_sec ?? 0;
   const warnCount = student.warning_count ?? 0;
-  const warnTone: Tone = warnCount === 0 ? 'neutral' : warnCount >= maxWarnings ? 'danger' : 'warn';
+  const warnTone: Tone = warnCount > 0 ? 'danger' : 'neutral';
   const progressPct =
     student.status === 'in_progress' && questionCount > 0
       ? Math.min(100, Math.round(((student.current_question_index ?? 0) / questionCount) * 100))
@@ -121,17 +130,17 @@ function StudentCard({
       </div>
 
       {student.status === 'in_progress' && (
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-bold text-ink-soft">
-            시간 추가{extraTimeSec > 0 ? ` (+${Math.round(extraTimeSec / 60)}분 함)` : ''}
+        <div className="flex items-center justify-between gap-1.5">
+          <span className="shrink-0 whitespace-nowrap text-[11px] font-bold text-ink-soft">
+            시간추가{extraTimeSec > 0 ? ` +${Math.round(extraTimeSec / 60)}분` : ''}
           </span>
-          <div className="flex gap-1">
+          <div className="flex shrink-0 gap-1">
             {EXTRA_TIME_OPTIONS.map((opt) => (
               <button
                 key={opt.seconds}
                 type="button"
                 onClick={() => onExtendTime(opt.seconds)}
-                className="rounded-full border border-line px-2 py-0.5 text-[11px] font-bold text-ink-soft transition-colors duration-150 hover:border-accent hover:bg-accent-soft hover:text-accent-ink"
+                className="whitespace-nowrap rounded-full border border-line px-1.5 py-0.5 text-[10px] font-bold text-ink-soft transition-colors duration-150 hover:border-accent hover:bg-accent-soft hover:text-accent-ink"
               >
                 {opt.label}
               </button>
@@ -150,15 +159,26 @@ function StudentCard({
           <IconEye className="h-3.5 w-3.5" />
           화면 보기
         </button>
-        <button
-          type="button"
-          disabled={!canForceEnd}
-          onClick={onForceEnd}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-full border border-line py-1.5 text-xs font-bold text-ink-soft transition-colors duration-150 hover:border-danger hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-line disabled:hover:bg-transparent disabled:hover:text-ink-soft"
-        >
-          <IconStopCircle className="h-3.5 w-3.5" />
-          강제 종료
-        </button>
+        {canRevive ? (
+          <button
+            type="button"
+            onClick={onRevive}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-full border border-line py-1.5 text-xs font-bold text-ink-soft transition-colors duration-150 hover:border-good hover:bg-good/10 hover:text-good"
+          >
+            <IconUndo className="h-3.5 w-3.5" />
+            되살리기
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={!canForceEnd}
+            onClick={onForceEnd}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-full border border-line py-1.5 text-xs font-bold text-ink-soft transition-colors duration-150 hover:border-danger hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-line disabled:hover:bg-transparent disabled:hover:text-ink-soft"
+          >
+            <IconStopCircle className="h-3.5 w-3.5" />
+            강제 종료
+          </button>
+        )}
       </div>
     </Card>
   );
@@ -170,12 +190,16 @@ function StudentDetailModal({
   questionCount,
   onClose,
   onForceEnd,
+  onAllowRejoin,
+  onRevive,
 }: {
   examId: number;
   sessionId: number;
   questionCount: number;
   onClose: () => void;
   onForceEnd: (sessionId: number) => void;
+  onAllowRejoin: (sessionId: number) => void;
+  onRevive: (sessionId: number) => void;
 }) {
   const [detail, setDetail] = useState<SessionMonitorDetail | null>(null);
 
@@ -189,8 +213,9 @@ function StudentDetailModal({
     return () => clearInterval(interval);
   }, [load]);
 
-  const meta = detail ? statusMeta(detail.session.status) : null;
+  const meta = detail ? statusMeta(detail.session.status, detail.session.disqualify_reason) : null;
   const canForceEnd = detail?.session.status === 'joined' || detail?.session.status === 'in_progress';
+  const canRevive = detail?.session.status === 'force_submitted';
 
   return (
     <div
@@ -301,9 +326,19 @@ function StudentDetailModal({
         </div>
 
         {canForceEnd && (
-          <div className="border-t border-line px-5 py-3">
+          <div className="flex flex-col gap-2 border-t border-line px-5 py-3">
+            <Button variant="secondary" className="w-full" onClick={() => onAllowRejoin(sessionId)}>
+              재참여 허용 (다른 기기로 이어가기)
+            </Button>
             <Button variant="danger" className="w-full" onClick={() => onForceEnd(sessionId)}>
               이 학생 시험 강제 종료
+            </Button>
+          </div>
+        )}
+        {canRevive && (
+          <div className="border-t border-line px-5 py-3">
+            <Button variant="secondary" className="w-full" onClick={() => onRevive(sessionId)}>
+              강제 종료 취소하고 되살리기
             </Button>
           </div>
         )}
@@ -380,6 +415,45 @@ export function ExamMonitor() {
     }
   }
 
+  // 같은 번호로 다른 기기가 참여를 시도했다가 "이미 참여 중인 기기가 있다"고 막힌 경우를
+  // 위한 예외 통로 - 원래 기기가 고장났다는 등 정당한 사유일 때만 눌러야 한다. 한 번
+  // 누르면 다음 참여 시도 한 번만 통과되고 다시 잠긴다.
+  async function allowRejoin(sessionId: number, rollNumber: number) {
+    if (
+      !confirm(
+        `${rollNumber}번 학생이 다른 기기로 다시 참여하도록 허용할까요?\n원래 쓰던 기기가 응시 중이면 그 기기와 답이 섞일 수 있으니, 정말 기기를 바꿔야 하는 경우에만 눌러주세요.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.post(`/exams/${examId}/sessions/${sessionId}/allow-rejoin`);
+      alert('허용했습니다. 학생이 다시 참여를 시도하면 이번 한 번만 통과됩니다.');
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : '재참여 허용 중 오류가 발생했습니다.');
+    }
+  }
+
+  // 강제 종료(화면 이탈 감지 또는 교사가 직접 종료)된 학생을 다시 응시 중으로 되살린다 -
+  // 화면 이탈은 첫 번째부터 바로 종료되므로, 학생이 실수였다고 소명하면 이 버튼으로
+  // 이어서 풀게 해준다. 서버가 시작 시각을 지금으로 다시 잡아서 처음 제한시간만큼 새로
+  // 주므로, 되살리자마자 시간 초과로 다시 종료되는 일은 없다.
+  async function revive(sessionId: number, rollNumber: number) {
+    if (
+      !confirm(
+        `${rollNumber}번 학생을 다시 응시 중 상태로 되살릴까요?\n경고 횟수는 0으로 초기화되고, 제한시간은 지금부터 다시 시작됩니다.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.post(`/exams/${examId}/sessions/${sessionId}/revive`);
+      load();
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : '되살리는 중 오류가 발생했습니다.');
+    }
+  }
+
   async function startExam(waitingCount: number, alreadyStarted: boolean) {
     const message = alreadyStarted
       ? `아직 대기 중인 학생 ${waitingCount}명을 지금 시작할까요?`
@@ -396,7 +470,7 @@ export function ExamMonitor() {
   async function endExam(activeCount: number) {
     if (
       !confirm(
-        `시험을 전체 종료할까요? 아직 대기·응시 중인 학생 ${activeCount}명이 지금까지 낸 답까지만 인정되어 즉시 제출 처리됩니다. 되돌릴 수 없습니다.`,
+        `시험을 전체 종료할까요? 아직 대기·응시 중인 학생 ${activeCount}명이 지금까지 낸 답까지만 인정되어 즉시 제출 처리됩니다.\n종료 후에도 "전체 되살리기"로 다시 응시 중 상태로 되돌릴 수 있습니다.`,
       )
     ) {
       return;
@@ -406,6 +480,24 @@ export function ExamMonitor() {
       load();
     } catch (err) {
       alert(err instanceof ApiError ? err.message : '종료 중 오류가 발생했습니다.');
+    }
+  }
+
+  // "시험 전체 종료"로 강제 제출된 학생 전원을 한 번에 되살린다. 개별 되살리기와 마찬가지로
+  // 제한시간이 지금부터 다시 시작되므로, 학생들에게 곧 다시 화면이 열린다는 걸 알려줘야 한다.
+  async function reviveAll(forceSubmittedCount: number) {
+    if (
+      !confirm(
+        `강제 종료됐던 학생 ${forceSubmittedCount}명을 전부 다시 응시 중 상태로 되살릴까요?\n각자 경고 횟수는 0으로 초기화되고, 제한시간은 지금부터 다시 시작됩니다.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.post(`/exams/${examId}/revive-all`);
+      load();
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : '되살리는 중 오류가 발생했습니다.');
     }
   }
 
@@ -432,6 +524,7 @@ export function ExamMonitor() {
   const flaggedCount = data.students.filter((s) => (s.warning_count ?? 0) > 0).length;
   const waitingCount = data.students.filter((s) => s.status === 'joined').length;
   const activeCount = data.students.filter((s) => s.status === 'joined' || s.status === 'in_progress').length;
+  const forceSubmittedCount = data.students.filter((s) => s.status === 'force_submitted').length;
   const examStarted = !!data.exam.started_at;
 
   return (
@@ -466,6 +559,11 @@ export function ExamMonitor() {
           >
             시험 전체 종료
           </Button>
+          {forceSubmittedCount > 0 && (
+            <Button variant="secondary" onClick={() => reviveAll(forceSubmittedCount)}>
+              전체 되살리기 ({forceSubmittedCount}명)
+            </Button>
+          )}
         </div>
       </div>
 
@@ -487,11 +585,11 @@ export function ExamMonitor() {
               key={s.roll_number}
               student={s}
               questionCount={data.exam.question_count}
-              maxWarnings={data.max_warnings}
               index={i}
               onView={() => s.session_id != null && setViewingSessionId(s.session_id)}
               onForceEnd={() => s.session_id != null && forceEnd(s.session_id, s.roll_number)}
               onExtendTime={(seconds) => s.session_id != null && extendTime(s.session_id, seconds)}
+              onRevive={() => s.session_id != null && revive(s.session_id, s.roll_number)}
             />
           ))}
         </div>
@@ -506,6 +604,14 @@ export function ExamMonitor() {
           onForceEnd={(sessionId) => {
             const student = data.students.find((s) => s.session_id === sessionId);
             if (student) forceEnd(sessionId, student.roll_number).then(() => setViewingSessionId(null));
+          }}
+          onAllowRejoin={(sessionId) => {
+            const student = data.students.find((s) => s.session_id === sessionId);
+            if (student) allowRejoin(sessionId, student.roll_number);
+          }}
+          onRevive={(sessionId) => {
+            const student = data.students.find((s) => s.session_id === sessionId);
+            if (student) revive(sessionId, student.roll_number).then(() => setViewingSessionId(null));
           }}
         />
       )}

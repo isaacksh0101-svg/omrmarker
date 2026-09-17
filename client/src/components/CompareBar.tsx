@@ -5,9 +5,12 @@ interface Props {
   formatValue: (v: number) => string;
 }
 
-// 정답률/풀이시간처럼 "반 평균"과 "나"를 한눈에 비교하는 2단 막대. maxValue를 어떻게
-// 주느냐로 두 가지로 다 쓴다 - 정답률은 절대 기준(1 = 100%)을, 풀이시간은 그 문항/성취기준
-// 안에서의 상대 기준(둘 중 큰 값)을 넘겨서 "누가 더 오래 걸렸는지"가 바로 보이게 한다.
+// 정답률/풀이시간처럼 "반 평균"과 "나"를 한눈에 비교하는 2단 막대. maxValue는 항상 절대
+// 기준으로 준다 - 정답률은 1(=100%), 풀이시간은 60000ms(=1분). 행마다 "그 안에서 둘 중
+// 큰 값"으로 스케일을 다시 잡으면, 12초짜리 행과 3초짜리 행의 막대가 (한쪽 값이 없을 때)
+// 똑같이 꽉 차 보여서 막대 길이가 실제 시간 크기를 전혀 반영하지 못하는 문제가 있었다.
+// 60초를 넘는 값은 100%로 클램프된다 - 대부분의 문항 풀이 시간은 1분 안쪽이라 기준으로 삼기
+// 적당하고, 어쩌다 넘는 경우까지 막대에 정밀하게 담을 필요는 없다고 판단했다.
 export function CompareBar({ classValue, myValue, maxValue, formatValue }: Props) {
   const safeMax = maxValue > 0 ? maxValue : 1;
   const classPct = Math.min(100, Math.round((classValue / safeMax) * 100));

@@ -17,6 +17,12 @@ export interface StandardTag {
   confidence: string | null;
 }
 
+export interface StandardCandidate {
+  code: string;
+  confidence: 'high' | 'medium' | 'low';
+  rationale: string;
+}
+
 export interface Question {
   id: number;
   exam_id: number;
@@ -27,6 +33,9 @@ export interface Question {
   points: number;
   correct_short_answers: string[] | null;
   ai_suggested: boolean;
+  // AI가 제안한 성취기준 후보 전체(관련도 순, 1순위는 이미 standards에 자동 태그됨) - 교사가
+  // AI 판단을 검토할 때 참고용. AI로 만들어지지 않은 문항은 null.
+  ai_standard_candidates: StandardCandidate[] | null;
   choices: Choice[];
   standards: StandardTag[];
 }
@@ -81,6 +90,7 @@ export interface ExamSession {
   score: number | null;
   max_score: number | null;
   current_question_index: number;
+  disqualify_reason: string | null;
   answers?: { order_index: number; is_correct: number; awarded_points: number }[];
 }
 
@@ -108,13 +118,6 @@ export interface PublicQuestion {
   prompt_image_path: string | null;
   points: number;
   choices: PublicChoice[];
-}
-
-export interface WarningResponse {
-  warning_count: number;
-  counted: boolean;
-  disqualified: boolean;
-  max_warnings: number;
 }
 
 export interface CurrentQuestionResponse {
@@ -206,6 +209,7 @@ export interface MonitorStudent {
   submitted_at: string | null;
   score: number | null;
   max_score: number | null;
+  disqualify_reason: string | null;
 }
 
 export interface ExamMonitorData {
@@ -218,7 +222,6 @@ export interface ExamMonitorData {
     started_at: string | null;
   };
   students: MonitorStudent[];
-  max_warnings: number;
 }
 
 export interface MonitorCurrentQuestion {
