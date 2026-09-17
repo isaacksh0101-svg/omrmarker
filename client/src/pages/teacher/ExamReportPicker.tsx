@@ -4,6 +4,7 @@ import { api, ApiError } from '../../api/client';
 import type { Exam, Subject } from '../../types';
 import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
+import { Button } from '../../components/Button';
 import { PageHeader } from '../../components/PageHeader';
 import { IconDocument } from '../../components/icons';
 import { displaySubjectName } from '../../lib/subjectName';
@@ -23,6 +24,10 @@ export function ExamReportPicker() {
   const [dateTo, setDateTo] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  // 선택 삭제 모드 - 켜져 있는 동안엔 카드를 눌러도 결과로 안 들어가고 선택만 토글된다.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   useEffect(() => {
     api.get<Exam[]>('/exams').then(setExams);
@@ -49,6 +54,42 @@ export function ExamReportPicker() {
     }
   }
 
+  function toggleSelect(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }
+
+  async function bulkDelete() {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    if (
+      !confirm(
+        `선택한 시험 ${ids.length}개를 영구 삭제할까요?\n이 시험들에 대한 학생 응시 기록까지 전부 사라지며 되돌릴 수 없습니다.`,
+      )
+    ) {
+      return;
+    }
+    setBulkDeleting(true);
+    try {
+      await Promise.all(ids.map((id) => api.delete(`/exams/${id}/permanent`)));
+      setExams((prev) => prev.filter((e2) => !selectedIds.has(e2.id)));
+      exitSelectMode();
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : '삭제 중 오류가 발생했습니다.');
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
+
   // 드롭다운에는 실제로 시험이 있는 과목만 보여준다 - 텅 빈 과목까지 나열하면 고를 게
   // 없는 항목들만 늘어난다.
   const availableSubjects = useMemo(() => {
@@ -69,7 +110,29 @@ export function ExamReportPicker() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      <PageHeader icon={IconDocument} title="시험별 리포트" />
+      <PageHeader
+        icon={IconDocument}
+        title="시험별 리포트"
+        right={
+          !selectMode ? (
+            exams.length > 0 && (
+              <button className="text-xs font-bold text-ink-soft hover:text-ink" onClick={() => setSelectMode(true)}>
+                선택 삭제
+              </button>
+            )
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-ink-soft">{selectedIds.size}개 선택됨</span>
+              <button className="text-xs font-bold text-ink-soft hover:text-ink" onClick={exitSelectMode}>
+                취소
+              </button>
+              <Button variant="danger" disabled={selectedIds.size === 0 || bulkDeleting} onClick={bulkDelete}>
+                {bulkDeleting ? '삭제 중...' : `영구 삭제 (${selectedIds.size})`}
+              </Button>
+            </div>
+          )
+        }
+      />
 
       {exams.length > 0 && (
         <div className="animate-fade-in-up mt-5 flex flex-wrap items-center gap-2 text-xs">
@@ -128,38 +191,54 @@ export function ExamReportPicker() {
           visibleExams.map((exam, i) => {
             // 삭제(보관 처리)된 시험도 한때 확정되어 결과가 쌓였다면 계속 리포트를 볼 수 있어야 한다.
             const viewable = exam.status === 'finalized' || exam.status === 'archived';
+            const selected = selectedIds.has(exam.id);
             return (
               <Card
                 key={exam.id}
                 className={`animate-fade-in-up flex items-center justify-between gap-3 transition-all duration-200 ${
-                  viewable
-                    ? 'cursor-pointer hover:-translate-y-0.5 hover:border-accent/60 hover:shadow-[0_4px_12px_rgba(16,24,40,0.08)]'
-                    : 'opacity-60'
+                  selectMode
+                    ? `cursor-pointer ${selected ? 'border-accent bg-accent-soft' : 'hover:border-accent/40'}`
+                    : viewable
+                      ? 'cursor-pointer hover:-translate-y-0.5 hover:border-accent/60 hover:shadow-[0_4px_12px_rgba(16,24,40,0.08)]'
+                      : 'opacity-60'
                 }`}
                 style={{ animationDelay: `${Math.min(i, 12) * 25}ms` }}
-                onClick={() => viewable && navigate(`/exams/${exam.id}/results`)}
+                onClick={() => (selectMode ? toggleSelect(exam.id) : viewable && navigate(`/exams/${exam.id}/results`))}
               >
-                <div className="min-w-0">
-                  <p className="flex items-center gap-1.5 text-sm font-bold text-ink">
-                    <span className="truncate">{exam.title}</span>
-                    {exam.status === 'archived' && <Badge tone="neutral">삭제됨</Badge>}
-                  </p>
-                  <p className="mt-0.5 text-xs text-ink-soft">
-                    {GRADE_LABEL[exam.grade_cluster] || exam.grade_cluster} · {exam.subject_id} ·{' '}
-                    {exam.created_at.slice(0, 10)}
-                  </p>
+                <div className="flex min-w-0 items-center gap-3">
+                  {selectMode && (
+                    <span
+                      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 text-[11px] font-bold transition-colors duration-150 ${
+                        selected ? 'border-accent bg-accent text-white' : 'border-line text-transparent'
+                      }`}
+                    >
+                      ✓
+                    </span>
+                  )}
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-1.5 text-sm font-bold text-ink">
+                      <span className="truncate">{exam.title}</span>
+                      {exam.status === 'archived' && <Badge tone="neutral">삭제됨</Badge>}
+                    </p>
+                    <p className="mt-0.5 text-xs text-ink-soft">
+                      {GRADE_LABEL[exam.grade_cluster] || exam.grade_cluster} · {exam.subject_id} ·{' '}
+                      {exam.created_at.slice(0, 10)}
+                    </p>
+                  </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <Badge tone={viewable ? 'good' : 'neutral'}>
                     {viewable ? '결과 보기' : '확정 후 리포트를 볼 수 있습니다'}
                   </Badge>
-                  <button
-                    className="text-xs font-bold text-ink-soft hover:text-danger disabled:opacity-50"
-                    disabled={deletingId === exam.id}
-                    onClick={(e) => permanentlyDelete(exam, e)}
-                  >
-                    영구 삭제
-                  </button>
+                  {!selectMode && (
+                    <button
+                      className="text-xs font-bold text-ink-soft hover:text-danger disabled:opacity-50"
+                      disabled={deletingId === exam.id}
+                      onClick={(e) => permanentlyDelete(exam, e)}
+                    >
+                      영구 삭제
+                    </button>
+                  )}
                 </div>
               </Card>
             );

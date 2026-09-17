@@ -3,6 +3,7 @@ import type { Question, StandardOption } from '../../../types';
 import { Card } from '../../../components/Card';
 import { PaperBuildTab } from './PaperBuildTab';
 import { AnswerGridInput } from './AnswerGridInput';
+import { AiAnswerUploadPanel } from './AiAnswerUploadPanel';
 
 interface Props {
   examId: number;
@@ -46,12 +47,17 @@ export function PaperModeBuilder({ examId, questions, standardOptions, missingBy
             onChanged={onChanged}
           />
         ) : (
-          <AnswerGridInput
-            examId={examId}
-            questions={questions}
-            missingByQuestion={missingByQuestion}
-            onChanged={onChanged}
-          />
+          <>
+            <AiAnswerUploadPanel examId={examId} onFilled={onChanged} />
+            <div className="mt-4">
+              <AnswerGridInput
+                examId={examId}
+                questions={questions}
+                missingByQuestion={missingByQuestion}
+                onChanged={onChanged}
+              />
+            </div>
+          </>
         )}
       </div>
     </Card>

@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS exams (
   mode TEXT NOT NULL DEFAULT 'online' CHECK(mode IN ('online','paper_marking')),
   status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','finalized','archived')),
   started_at TEXT,
+  -- 교사가 감독 화면에서 "시험 전체 종료"를 눌러 실제로 끝낸 시각. "시험 재시작"을
+  -- 누르면 다시 NULL로 돌아간다 - 감독 화면이 대기중/감독중/종료됨을 구분하는 기준.
   ends_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))

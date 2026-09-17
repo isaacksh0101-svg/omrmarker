@@ -144,6 +144,70 @@ async function callGemini({ imageBase64, mimeType, promptText, responseSchema })
   return JSON.parse(text);
 }
 
+function buildAnswerKeySchema() {
+  return {
+    type: 'OBJECT',
+    properties: {
+      answers: {
+        type: 'ARRAY',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            question_number: {
+              type: 'INTEGER',
+              description: '정답지에 적힌 문항 번호. 아래 목록의 번호와 반드시 일치해야 한다.',
+            },
+            answer: {
+              type: 'STRING',
+              description:
+                '객관식이면 정답 보기의 번호(1~보기 개수)를 아라비아 숫자로. ①②③처럼 동그라미 숫자로 ' +
+                '표시돼 있어도 해당 아라비아 숫자로 바꿔 적는다. 단답형이면 정답 텍스트를 그대로 옮기고, ' +
+                '정답이 여러 개 인정되면 쉼표로 구분한다.',
+            },
+          },
+          required: ['question_number', 'answer'],
+        },
+      },
+    },
+    required: ['answers'],
+  };
+}
+
+function buildAnswerKeyPrompt(questions) {
+  const list = questions
+    .map((q) =>
+      q.type === 'mc'
+        ? `- ${q.order_index + 1}번: 객관식(보기 ${q.numChoices}개 중 정답 번호 1~${q.numChoices})`
+        : `- ${q.order_index + 1}번: 단답형(정답 텍스트)`,
+    )
+    .join('\n');
+
+  return `당신은 초등학교 시험 정답지(답안지) 이미지를 읽어 문항 번호별 정답을 추출하는 보조 도구입니다.
+
+이 시험은 다음 문항들로 구성되어 있습니다:
+${list}
+
+이미지에 있는 정답지를 읽고, 각 문항 번호에 대한 정답을 추출하세요.
+- 객관식 문항은 정답 보기의 번호만 숫자로 적으세요. ①②③④⑤처럼 동그라미 숫자로 표시돼 있어도 해당하는
+  아라비아 숫자(1~보기 개수)로 바꿔 적으세요.
+- 단답형 문항은 정답으로 적힌 텍스트를 그대로 옮겨 적으세요. 정답이 여러 개 인정되는 경우(예: "5 또는
+  5개")는 쉼표로 구분해서 적으세요.
+- 문항 번호는 반드시 위 목록의 번호와 일치시키세요. 이미지에서 실제로 읽을 수 있는 문항만 결과에
+  포함하고, 흐릿하거나 확실하지 않은 문항은 억지로 추측해서 넣지 말고 빼세요.
+- 정답 이외의 해설이나 다른 정보는 옮기지 마세요.`;
+}
+
+export async function extractAnswerKeyFromImage({ imageBase64, mimeType, questions }) {
+  const promptText = buildAnswerKeyPrompt(questions);
+  const responseSchema = buildAnswerKeySchema();
+
+  const result = await callGemini({ imageBase64, mimeType, promptText, responseSchema });
+
+  return (result.answers ?? [])
+    .filter((a) => Number.isInteger(a?.question_number) && typeof a?.answer === 'string' && a.answer.trim())
+    .map((a) => ({ question_number: a.question_number, answer: a.answer.trim() }));
+}
+
 export async function extractQuestionsFromImage({ imageBase64, mimeType, subjectId, gradeCluster }) {
   const candidateStandards = filterStandards({ subject_id: subjectId, grade_cluster: gradeCluster });
   if (candidateStandards.length === 0) {

@@ -575,30 +575,6 @@ export function TakeExam() {
               ) : (
                 <p className="text-base text-ink-soft">종이 시험지의 {q.order_index + 1}번 문항을 마킹하세요.</p>
               )}
-
-              {/* 문제 이미지에 보기(①②③④⑤)가 이미 포함돼 있으면(AI가 보기까지 통째로 잘라준
-                  경우) 보기 텍스트를 따로 또 보여줄 필요가 없다 - 번호 토글은 아래 하단 바에
-                  단답형 정답 입력칸과 같은 자리에 둔다(교사 피드백: 문항 종류가 달라도 "정답을
-                  입력하는 자리"는 같은 위치여야 한다). 이미지가 없는 문항(옛날에 텍스트로만
-                  추출됐거나, 이미지 자르기가 실패한 경우)만 여기 본문 쪽에 보기 텍스트 버튼을
-                  그대로 보여준다. */}
-              {q.type === 'mc' && !q.prompt_image_path && (
-                <div className="mt-4 flex flex-col gap-2">
-                  {q.choices.map((c) => (
-                    <button
-                      key={c.id}
-                      className={`rounded-xl border px-3.5 py-2.5 text-left text-sm transition-all duration-150 ${
-                        selectedChoice === c.id
-                          ? 'border-accent bg-accent-soft text-accent-ink'
-                          : 'border-line bg-panel text-ink hover:border-accent/50'
-                      }`}
-                      onClick={() => setSelectedChoice(c.id)}
-                    >
-                      <MathText text={c.text} />
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
 
             {/* 필기는 문제/선택지 영역을 포함한 연습장 전체 위에 덮인다 - 켜져 있는 동안엔
@@ -621,14 +597,14 @@ export function TakeExam() {
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-line bg-panel px-4 py-3 sm:px-6">
         {q.type === 'short' && (
           <input
-            className="min-w-0 flex-1 rounded-xl border border-line bg-bg px-4 py-2.5 text-base text-ink outline-none focus:border-accent sm:max-w-xs"
+            className="w-full min-w-0 rounded-xl border border-line bg-bg px-4 py-2.5 text-base text-ink outline-none focus:border-accent sm:w-[28rem]"
             placeholder="정답 입력"
             value={shortAnswer}
             onChange={(e) => setShortAnswer(e.target.value)}
           />
         )}
         {q.type === 'mc' && q.prompt_image_path && (
-          <div className="mr-auto flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2">
             {q.choices.map((c, i) => (
               <button
                 key={c.id}
@@ -640,6 +616,26 @@ export function TakeExam() {
                 onClick={() => setSelectedChoice(c.id)}
               >
                 {i + 1}
+              </button>
+            ))}
+          </div>
+        )}
+        {/* 이미지에 보기가 이미 포함된 경우(위)엔 번호만 고르면 되지만, 텍스트로만 된
+            문항(수동으로 직접 만든 문항 등)은 보기 내용을 여기서도 보여줘야 한다 - 문항
+            종류가 달라도 "정답을 고르는 자리"는 항상 화면 오른쪽 아래로 같아야 한다. */}
+        {q.type === 'mc' && !q.prompt_image_path && (
+          <div className="flex flex-wrap justify-end gap-2">
+            {q.choices.map((c) => (
+              <button
+                key={c.id}
+                className={`rounded-xl border px-3.5 py-2.5 text-left text-sm transition-all duration-150 ${
+                  selectedChoice === c.id
+                    ? 'border-accent bg-accent-soft text-accent-ink'
+                    : 'border-line bg-panel text-ink hover:border-accent/50'
+                }`}
+                onClick={() => setSelectedChoice(c.id)}
+              >
+                <MathText text={c.text} />
               </button>
             ))}
           </div>

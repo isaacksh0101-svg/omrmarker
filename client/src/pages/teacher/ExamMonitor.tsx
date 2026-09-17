@@ -483,21 +483,19 @@ export function ExamMonitor() {
     }
   }
 
-  // "시험 전체 종료"로 강제 제출된 학생 전원을 한 번에 되살린다. 개별 되살리기와 마찬가지로
-  // 제한시간이 지금부터 다시 시작되므로, 학생들에게 곧 다시 화면이 열린다는 걸 알려줘야 한다.
-  async function reviveAll(forceSubmittedCount: number) {
-    if (
-      !confirm(
-        `강제 종료됐던 학생 ${forceSubmittedCount}명을 전부 다시 응시 중 상태로 되살릴까요?\n각자 경고 횟수는 0으로 초기화되고, 제한시간은 지금부터 다시 시작됩니다.`,
-      )
-    ) {
-      return;
-    }
+  // "시험 전체 종료"를 취소하고 다시 감독중 상태로 되돌린다 - 강제 제출됐던 학생들을
+  // 응시 중으로 되살리는 동시에, 감독 화면 상단도 "종료됨"에서 "감독중"으로 돌아간다.
+  async function restartExam(forceSubmittedCount: number) {
+    const message =
+      forceSubmittedCount > 0
+        ? `강제 종료됐던 학생 ${forceSubmittedCount}명을 응시 중으로 되돌리고 시험을 재시작할까요?\n각자 경고 횟수는 0으로 초기화되고, 제한시간은 지금부터 다시 시작됩니다.`
+        : '시험을 재시작할까요? 감독 화면이 다시 "감독중" 상태로 돌아갑니다.';
+    if (!confirm(message)) return;
     try {
       await api.post(`/exams/${examId}/revive-all`);
       load();
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : '되살리는 중 오류가 발생했습니다.');
+      alert(err instanceof ApiError ? err.message : '재시작 중 오류가 발생했습니다.');
     }
   }
 
@@ -526,6 +524,10 @@ export function ExamMonitor() {
   const activeCount = data.students.filter((s) => s.status === 'joined' || s.status === 'in_progress').length;
   const forceSubmittedCount = data.students.filter((s) => s.status === 'force_submitted').length;
   const examStarted = !!data.exam.started_at;
+  // "시험 전체 종료" 버튼을 누른 게 1차 기준(exam.ends_at)이지만, 그 뒤에 지각 학생이
+  // 새로 입장하는 등 실제로 응시 중인 학생이 생기면 - ends_at이 남아있어도 - 감독중으로
+  // 본다. 교사 액션이 기준이되 화면이 거짓말하지 않도록 실제 현황이 최종 안전망이다.
+  const examEnded = !!data.exam.ends_at && activeCount === 0;
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-12">
@@ -539,29 +541,40 @@ export function ExamMonitor() {
           className={`h-2 w-2 rounded-full transition-colors duration-300 ${pulse ? 'bg-good' : 'bg-line'}`}
           title="실시간 연결됨"
         />
-        <span className="text-xs text-ink-soft">실시간 감독 중</span>
+        {/* 대기중/감독중/종료됨 - 교사가 한눈에 지금 상태를 알 수 있어야 해서 항상 같은
+            자리에 뱃지로 명확히 표시한다("실시간 감독 중"이 종료 후에도 그대로 떠 있던 게
+            헷갈렸던 원인이었다). */}
+        {examEnded ? (
+          <Badge tone="danger">시험 종료됨</Badge>
+        ) : examStarted ? (
+          <Badge tone="good">감독중</Badge>
+        ) : (
+          <Badge tone="neutral">학생 입장 대기 중</Badge>
+        )}
 
         <div className="ml-auto flex items-center gap-2">
           {waitingCount > 0 ? (
             <Button onClick={() => startExam(waitingCount, examStarted)}>
               {examStarted ? `대기 중인 학생 시작 (${waitingCount}명)` : '시험 시작'}
             </Button>
-          ) : examStarted ? (
+          ) : examStarted && !examEnded ? (
             <Badge tone="good">모든 학생 시작함</Badge>
-          ) : (
+          ) : !examEnded ? (
             <Badge tone="neutral">입장한 학생이 없습니다</Badge>
+          ) : null}
+          {!examEnded && (
+            <Button
+              variant="danger"
+              disabled={activeCount === 0}
+              title={activeCount === 0 ? '대기·응시 중인 학생이 없습니다.' : undefined}
+              onClick={() => endExam(activeCount)}
+            >
+              시험 전체 종료
+            </Button>
           )}
-          <Button
-            variant="danger"
-            disabled={activeCount === 0}
-            title={activeCount === 0 ? '대기·응시 중인 학생이 없습니다.' : undefined}
-            onClick={() => endExam(activeCount)}
-          >
-            시험 전체 종료
-          </Button>
-          {forceSubmittedCount > 0 && (
-            <Button variant="secondary" onClick={() => reviveAll(forceSubmittedCount)}>
-              전체 되살리기 ({forceSubmittedCount}명)
+          {examEnded && (
+            <Button variant="secondary" onClick={() => restartExam(forceSubmittedCount)}>
+              시험 재시작{forceSubmittedCount > 0 ? ` (${forceSubmittedCount}명)` : ''}
             </Button>
           )}
         </div>

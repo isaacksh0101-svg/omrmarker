@@ -220,6 +220,7 @@ export interface ExamMonitorData {
     question_count: number;
     time_limit_sec: number;
     started_at: string | null;
+    ends_at: string | null;
   };
   students: MonitorStudent[];
 }

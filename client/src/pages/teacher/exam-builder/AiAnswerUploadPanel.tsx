@@ -1,0 +1,79 @@
+import { useRef, useState } from 'react';
+import { api, ApiError } from '../../../api/client';
+import { Card } from '../../../components/Card';
+import { Button } from '../../../components/Button';
+
+interface Props {
+  examId: number;
+  onFilled: () => void;
+}
+
+interface AiExtractAnswersResponse {
+  applied: number[];
+  skipped: number[];
+}
+
+export function AiAnswerUploadPanel({ examId, onFilled }: Props) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<AiExtractAnswersResponse | null>(null);
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    setError(null);
+    setResult(null);
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await api.postForm<AiExtractAnswersResponse>(`/exams/${examId}/ai-extract-answers`, formData);
+      setResult(res);
+      onFilled();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'AI 추출 중 오류가 발생했습니다.');
+    } finally {
+      setLoading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  return (
+    <Card>
+      <h2 className="text-sm font-bold text-ink">AI로 정답 채우기</h2>
+      <p className="mt-1 text-xs text-ink-soft">
+        정답지 사진(JPG/PNG) 또는 PDF를 올리면 AI가 문항 번호에 맞춰 정답을 자동으로 채웁니다. 채운
+        뒤에도 아래 표에서 확인하고 수정할 수 있습니다.
+      </p>
+      <div className="mt-3 flex items-center gap-2">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,application/pdf"
+          onChange={handleFileChange}
+          className="hidden"
+          id="ai-answer-upload-input"
+        />
+        <Button variant="secondary" disabled={loading} onClick={() => fileInputRef.current?.click()}>
+          {loading ? '분석 중...' : '정답지 선택'}
+        </Button>
+        {fileName && <span className="text-xs text-ink-soft">{fileName}</span>}
+      </div>
+      {error && <p className="mt-2 text-xs font-bold text-danger">{error}</p>}
+      {result && (
+        <p className="mt-2 text-xs font-bold text-ink">
+          {result.applied.length}개 문항의 정답을 채웠습니다.
+          {result.skipped.length > 0 && (
+            <span className="font-normal text-ink-soft">
+              {' '}
+              인식하지 못한 문항은 직접 입력해주세요: {result.skipped.join(', ')}번
+            </span>
+          )}
+        </p>
+      )}
+    </Card>
+  );
+}

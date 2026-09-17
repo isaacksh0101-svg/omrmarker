@@ -7,6 +7,7 @@ import { Button } from '../../../components/Button';
 import { Badge } from '../../../components/Badge';
 import { QuestionEditor } from './QuestionEditor';
 import { AiUploadPanel } from './AiUploadPanel';
+import { AiAnswerUploadPanel } from './AiAnswerUploadPanel';
 import { PaperModeBuilder } from './PaperModeBuilder';
 import { AnswerGridInput } from './AnswerGridInput';
 
@@ -169,6 +170,9 @@ export function ExamBuilder() {
                   정답지를 보면서 순서대로 빠르게 입력하세요. 객관식은 정답 번호를, 단답형은 정답을
                   입력합니다.
                 </p>
+                <div className="mt-3">
+                  <AiAnswerUploadPanel examId={exam.id} onFilled={reload} />
+                </div>
                 <div className="mt-3">
                   <AnswerGridInput
                     examId={exam.id}

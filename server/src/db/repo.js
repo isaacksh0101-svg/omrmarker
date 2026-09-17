@@ -318,6 +318,16 @@ export async function markExamStarted(examId) {
     .run(now(), now(), examId);
 }
 
+// 교사가 감독 화면에서 "시험 전체 종료"를 누른 시각 - 감독 화면이 대기중/감독중/종료됨을
+// 구분하는 기준이 된다. "시험 재시작"을 누르면 clearExamEnded로 다시 NULL로 돌아간다.
+export async function markExamEnded(examId) {
+  await db.prepare('UPDATE exams SET ends_at = ?, updated_at = ? WHERE id = ?').run(now(), now(), examId);
+}
+
+export async function clearExamEnded(examId) {
+  await db.prepare('UPDATE exams SET ends_at = NULL, updated_at = ? WHERE id = ?').run(now(), examId);
+}
+
 // 아직 대기 중(joined)인 학생 전원을 한 번에 응시 상태로 바꾼다. 새로 입장하는 학생은
 // 이 함수를 부르지 않아도 sessions.js의 join 라우트가 exam.started_at을 보고 즉시 시작시킨다.
 export async function startAllJoinedSessions(examId) {

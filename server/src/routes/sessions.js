@@ -133,19 +133,21 @@ sessionsRouter.post('/:id/end-all', async (req, res) => {
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
 
   const ended = await repo.endAllActiveSessions(examId);
+  await repo.markExamEnded(examId);
   emitExamMonitorUpdate(examId);
   res.json({ ended });
 });
 
 // 교사가 '시험 감독' 화면에서 누른다. "시험 전체 종료"로 한 번에 강제 제출됐던 학생
-// 전원을 한 번에 다시 응시 중으로 되돌린다(실수로 눌렀거나, 사정을 봐서 계속 풀게
-// 해주고 싶을 때). 스스로 제출을 마친(submitted) 학생은 대상에서 제외된다.
+// 전원을 한 번에 다시 응시 중으로 되돌리고(시험 재시작), 감독 화면도 다시 "감독중"으로
+// 돌아가도록 exams.ends_at을 지운다. 스스로 제출을 마친(submitted) 학생은 대상에서 제외된다.
 sessionsRouter.post('/:id/revive-all', async (req, res) => {
   const examId = Number(req.params.id);
   const exam = await repo.getExam(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
 
   const revived = await repo.reviveAllForceSubmittedSessions(examId);
+  await repo.clearExamEnded(examId);
   emitExamMonitorUpdate(examId);
   res.json({ revived });
 });
@@ -412,6 +414,7 @@ sessionsRouter.get('/:id/monitor', async (req, res) => {
       question_count: exam.questions.length,
       time_limit_sec: exam.time_limit_sec,
       started_at: exam.started_at,
+      ends_at: exam.ends_at,
     },
     students,
   });

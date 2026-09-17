@@ -160,7 +160,6 @@ export function RosterPage() {
             <span className="text-xs font-bold text-ink-soft">이름(선택)</span>
             <input
               className="w-full rounded-xl border border-line bg-bg px-3 py-2 text-sm text-ink outline-none focus:border-accent"
-              placeholder="예: 김민준"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
