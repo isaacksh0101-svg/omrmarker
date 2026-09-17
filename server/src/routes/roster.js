@@ -20,3 +20,8 @@ rosterRouter.delete('/:rollNumber', async (req, res) => {
   await repo.deleteRosterEntry(Number(req.params.rollNumber));
   res.status(204).end();
 });
+
+// 학생별 리포트에서 "이 학생이 응시한 시험들" 목록을 보여주기 위함.
+rosterRouter.get('/:rollNumber/exams', async (req, res) => {
+  res.json(await repo.getExamsForRollNumber(Number(req.params.rollNumber)));
+});

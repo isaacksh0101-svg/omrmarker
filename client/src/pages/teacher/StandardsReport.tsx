@@ -1,15 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/client';
-import type { RosterEntry, StandardAccuracy } from '../../types';
+import type { RosterEntry, StandardAccuracy, StudentExamSummary } from '../../types';
 import { Card } from '../../components/Card';
+import { Badge } from '../../components/Badge';
 import { AccuracyRow } from '../../components/AccuracyRow';
 import { CompareBar } from '../../components/CompareBar';
 import { TimeUnitBars } from '../../components/TimeUnitBars';
 import { StatCard, StatCardRow } from '../../components/StatCard';
 import { PageHeader } from '../../components/PageHeader';
+import { SessionDetailModal } from '../../components/SessionDetailModal';
 import { IconChart } from '../../components/icons';
 import { displaySubjectName } from '../../lib/subjectName';
 import { downloadWorkbook } from '../../lib/exportXlsx';
+
+const GRADE_LABEL: Record<string, string> = {
+  elem_1_2: '1~2학년군',
+  elem_3_4: '3~4학년군',
+  elem_5_6: '5~6학년군',
+};
 
 function formatMs(ms: number | null) {
   if (ms == null) return '-';
@@ -41,10 +49,21 @@ export function StandardsReport() {
   const [classData, setClassData] = useState<StandardAccuracy[]>([]);
   const [sortLowFirst, setSortLowFirst] = useState(false);
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
+  const [studentExams, setStudentExams] = useState<StudentExamSummary[]>([]);
+  const [viewingExam, setViewingExam] = useState<StudentExamSummary | null>(null);
 
   useEffect(() => {
     api.get<RosterEntry[]>('/roster').then(setRoster);
   }, []);
+
+  // 학생을 고르면 그 학생이 실제로 낸 시험들(문항별 상세를 열어볼 수 있는 목록)도 같이 불러온다.
+  useEffect(() => {
+    if (!rollNumber) {
+      setStudentExams([]);
+      return;
+    }
+    api.get<StudentExamSummary[]>(`/roster/${rollNumber}/exams`).then(setStudentExams);
+  }, [rollNumber]);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -248,6 +267,31 @@ export function StandardsReport() {
         </div>
       )}
 
+      {comparing && studentExams.length > 0 && (
+        <Card className="animate-fade-in-up mt-4" style={{ animationDelay: '40ms' }}>
+          <h2 className="text-sm font-bold text-ink">이 학생이 응시한 시험</h2>
+          <div className="mt-2 flex flex-col divide-y divide-line">
+            {studentExams.map((se) => (
+              <button
+                key={se.session_id}
+                type="button"
+                className="flex items-center justify-between gap-3 py-2.5 text-left transition-colors duration-150 hover:text-accent"
+                onClick={() => setViewingExam(se)}
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold text-ink">{se.title}</p>
+                  <p className="mt-0.5 text-xs text-ink-soft">
+                    {GRADE_LABEL[se.grade_cluster] || se.grade_cluster} · {se.subject_id}
+                    {se.submitted_at ? ` · ${se.submitted_at.slice(0, 10)}` : ''}
+                  </p>
+                </div>
+                <Badge tone="neutral">{se.max_score != null ? `${se.score ?? 0} / ${se.max_score}` : '-'}</Badge>
+              </button>
+            ))}
+          </div>
+        </Card>
+      )}
+
       {comparing ? (
         groupedCompare.length === 0 ? (
           <p className="mt-8 text-sm text-ink-soft">
@@ -322,6 +366,16 @@ export function StandardsReport() {
             </div>
           </Card>
         ))
+      )}
+
+      {viewingExam && (
+        <SessionDetailModal
+          examId={viewingExam.exam_id}
+          sessionId={viewingExam.session_id}
+          questionCount={viewingExam.question_count}
+          examTitle={viewingExam.title}
+          onClose={() => setViewingExam(null)}
+        />
       )}
     </div>
   );

@@ -6,6 +6,7 @@ import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
 import { AccuracyRow } from '../../components/AccuracyRow';
 import { StatCard, StatCardRow } from '../../components/StatCard';
+import { SessionDetailModal } from '../../components/SessionDetailModal';
 import { downloadWorkbook } from '../../lib/exportXlsx';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -38,6 +39,7 @@ export function ExamResults() {
   const [expandedQuestionId, setExpandedQuestionId] = useState<number | null>(null);
   const [breakdowns, setBreakdowns] = useState<Record<number, QuestionBreakdown>>({});
   const [loadingBreakdownId, setLoadingBreakdownId] = useState<number | null>(null);
+  const [viewingSessionId, setViewingSessionId] = useState<number | null>(null);
 
   useEffect(() => {
     api.get<Exam>(`/exams/${id}`).then(setExam);
@@ -104,7 +106,6 @@ export function ExamResults() {
           점수: s.score ?? '',
           만점: s.max_score ?? '',
           제출시각: s.submitted_at ? new Date(s.submitted_at).toLocaleString('ko-KR') : '',
-          화면이탈횟수: s.warning_count,
           확인필요: s.isOutlier ? s.outlierReasons.join(', ') : '',
         })),
       },
@@ -278,7 +279,13 @@ export function ExamResults() {
           </thead>
           <tbody>
             {data.sessions.map((s) => (
-              <tr key={s.roll_number} className="border-b border-line last:border-0">
+              <tr
+                key={s.roll_number}
+                className={`border-b border-line last:border-0 ${
+                  s.session_id != null ? 'cursor-pointer hover:bg-bg' : ''
+                }`}
+                onClick={() => s.session_id != null && setViewingSessionId(s.session_id)}
+              >
                 <td className="whitespace-nowrap px-3 py-2.5 font-bold text-ink">{s.roll_number}</td>
                 <td className="max-w-[7rem] truncate px-3 py-2.5 text-ink-soft">{s.name || '-'}</td>
                 <td className="whitespace-nowrap px-3 py-2.5 text-ink-soft">{STATUS_LABEL[s.status] ?? s.status}</td>
@@ -289,10 +296,7 @@ export function ExamResults() {
                   {s.submitted_at ? formatSubmittedAt(s.submitted_at) : '-'}
                 </td>
                 <td className="px-3 py-2.5">
-                  <div className="flex flex-wrap gap-1">
-                    {s.isOutlier && <Badge tone="warn">{s.outlierReasons.join(', ')}</Badge>}
-                    {s.warning_count > 0 && <Badge tone="danger">화면 이탈 {s.warning_count}회</Badge>}
-                  </div>
+                  {s.isOutlier && <Badge tone="warn">{s.outlierReasons.join(', ')}</Badge>}
                 </td>
               </tr>
             ))}
@@ -306,6 +310,16 @@ export function ExamResults() {
           </tbody>
         </table>
       </Card>
+
+      {viewingSessionId != null && (
+        <SessionDetailModal
+          examId={Number(id)}
+          sessionId={viewingSessionId}
+          questionCount={data.questionStats.length}
+          examTitle={exam.title}
+          onClose={() => setViewingSessionId(null)}
+        />
+      )}
     </div>
   );
 }

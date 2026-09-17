@@ -1,3 +1,5 @@
+import type { StrokesPayload } from './lib/strokes';
+
 export type QuestionType = 'mc' | 'short';
 export type ExamStatus = 'draft' | 'finalized' | 'archived';
 export type ExamMode = 'online' | 'paper_marking';
@@ -48,6 +50,7 @@ export interface Exam {
   time_limit_sec: number;
   mode: ExamMode;
   status: ExamStatus;
+  memo: string | null;
   started_at: string | null;
   ends_at: string | null;
   created_at: string;
@@ -177,6 +180,7 @@ export interface QuestionBreakdown {
 }
 
 export interface ExamResultSession {
+  session_id: number | null;
   roll_number: number;
   name: string | null;
   status: SessionStatus;
@@ -184,7 +188,6 @@ export interface ExamResultSession {
   max_score: number | null;
   submitted_at: string | null;
   total_time_ms: number;
-  warning_count: number;
   isOutlier: boolean;
   outlierReasons: string[];
 }
@@ -245,6 +248,7 @@ export interface MonitorHistoryItem {
   awarded_points: number | null;
   time_spent_ms: number | null;
   answered_at: string | null;
+  strokes: StrokesPayload | null;
 }
 
 export interface SessionMonitorDetail {
@@ -252,6 +256,20 @@ export interface SessionMonitorDetail {
   student: { roll_number: number; name: string | null } | null;
   currentQuestion: MonitorCurrentQuestion | null;
   history: MonitorHistoryItem[];
+}
+
+// 학생별 리포트에서 "이 학생이 응시한 시험들" 목록에 쓰는 항목.
+export interface StudentExamSummary {
+  exam_id: number;
+  title: string;
+  subject_id: string;
+  grade_cluster: string;
+  session_id: number;
+  status: SessionStatus;
+  score: number | null;
+  max_score: number | null;
+  submitted_at: string | null;
+  question_count: number;
 }
 
 export interface LanIpCandidate {

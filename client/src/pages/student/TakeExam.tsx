@@ -297,6 +297,11 @@ export function TakeExam() {
       const body: Record<string, unknown> = { question_id: activeQuestion.id };
       if (activeQuestion.type === 'mc') body.selected_choice_id = selectedChoice;
       else body.short_answer_text = shortAnswer;
+      const strokes = penRef.current?.getStrokes() ?? [];
+      if (strokes.length > 0) {
+        body.strokes = strokes;
+        body.strokes_canvas_size = penRef.current?.getCanvasSize();
+      }
 
       const result = await api.post<CurrentQuestionResponse>(`/exams/${id}/sessions/${sessionId}/answers`, body);
       await afterAnswerLikeResponse(result);

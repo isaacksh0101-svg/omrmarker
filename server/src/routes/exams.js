@@ -55,6 +55,18 @@ examsRouter.put('/:id', async (req, res) => {
   res.json(await repo.getExamFull(id));
 });
 
+// 관리 화면에서만 쓰는 교사용 메모(학생에게는 노출 안 됨) - 제목은 자유롭게 두고
+// 쌓인 시험지를 구분할 짧은 설명만 따로 붙일 수 있게 한다.
+examsRouter.put('/:id/memo', async (req, res) => {
+  const id = Number(req.params.id);
+  const exam = await repo.getExam(id);
+  if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
+
+  const memo = typeof req.body.memo === 'string' ? req.body.memo.slice(0, 200) : '';
+  await repo.setExamMemo(id, memo || null);
+  res.json(await repo.getExamFull(id));
+});
+
 // 시험지 삭제: 실제로는 보관(archived) 처리만 해서 목록에서 감추고, 이미 쌓인 학생
 // 응시 결과(exam_sessions/answers)는 그대로 남겨 시험별 리포트에서 계속 볼 수 있게 한다.
 examsRouter.delete('/:id', async (req, res) => {
@@ -64,6 +76,17 @@ examsRouter.delete('/:id', async (req, res) => {
 
   await repo.archiveExam(id);
   res.status(204).end();
+});
+
+// 숨기기 취소("다시 보이기") - 목록에서 다시 보이도록 숨기기 전 상태로 복원한다.
+examsRouter.post('/:id/unarchive', async (req, res) => {
+  const id = Number(req.params.id);
+  const exam = await repo.getExam(id);
+  if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
+  if (exam.status !== 'archived') return res.status(400).json({ error: '숨겨진 시험이 아닙니다.' });
+
+  await repo.unarchiveExam(id);
+  res.json(await repo.getExamFull(id));
 });
 
 // 시험별 리포트 화면에서 쓰는 진짜 영구 삭제. 응시 기록까지 전부 사라지므로 되돌릴 수

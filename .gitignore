@@ -1,5 +1,7 @@
 node_modules/
 dist/
+electron/.staging/
+electron/release/
 server/data/*.sqlite3
 server/data/uploads/*
 !server/data/uploads/.gitkeep

@@ -1,11 +1,11 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title OMR 프로그램 실행 도우미
+title ScoreLab 실행 도우미
 
 cd /d "%~dp0"
 
-echo [OMR] 실행 준비 중...
+echo [ScoreLab] 실행 준비 중...
 
 where node >nul 2>&1
 if errorlevel 1 (
@@ -41,7 +41,7 @@ if errorlevel 1 (
 powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort 4000 -State Listen -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
 if errorlevel 1 (
     echo.
-    echo [안내] OMR 프로그램이 이미 실행 중인 것 같습니다 ^(포트 4000번이 사용 중입니다^).
+    echo [안내] ScoreLab이 이미 실행 중인 것 같습니다 ^(포트 4000번이 사용 중입니다^).
     echo.
     REM choice 명령은 프롬프트를 띄울 때마다 시스템 삑 소리를 내서, 매번 실행할 때마다
     REM 나는 이 소리가 거슬린다는 피드백에 따라 소리 없는 PowerShell 방식으로 바꿨다.
@@ -54,7 +54,7 @@ if errorlevel 1 (
         exit /b 1
     )
 
-    echo [OMR] 기존 프로그램을 종료하는 중...
+    echo [ScoreLab] 기존 프로그램을 종료하는 중...
     powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 4000 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"
 
     powershell -NoProfile -Command "$deadline = (Get-Date).AddSeconds(10); while ((Get-Date) -lt $deadline) { if (-not (Get-NetTCPConnection -LocalPort 4000 -State Listen -ErrorAction SilentlyContinue)) { exit 0 }; Start-Sleep -Milliseconds 200 }; exit 1"
@@ -65,7 +65,7 @@ if errorlevel 1 (
         pause
         exit /b 1
     )
-    echo [OMR] 종료 완료. 새로 시작합니다...
+    echo [ScoreLab] 종료 완료. 새로 시작합니다...
     echo.
 )
 
@@ -82,7 +82,7 @@ if "%NEED_INSTALL%"=="0" (
 )
 
 if "%NEED_INSTALL%"=="1" (
-    echo [OMR] 필요한 패키지를 설치/업데이트합니다.
+    echo [ScoreLab] 필요한 패키지를 설치/업데이트합니다.
     echo 인터넷 연결 상태에 따라 몇 분 정도 걸릴 수 있습니다.
     call npm install
     if errorlevel 1 (
@@ -98,9 +98,9 @@ if "%NEED_INSTALL%"=="1" (
 REM 바탕화면에 예쁜 아이콘 바로가기를 만들어둔다(처음 한 번은 이 파일을 직접 더블클릭해야 하지만,
 REM 그 다음부터는 바탕화면 아이콘으로 실행할 수 있게). 폴더를 어디로 옮기거나 다른 PC에서 실행해도
 REM %~f0/%~dp0는 항상 "지금 이 파일이 실제로 있는 위치"를 가리키므로 매번 다시 만들어도 항상 정확하다.
-powershell -NoProfile -Command "$s = (New-Object -ComObject WScript.Shell).CreateShortcut(\"$env:USERPROFILE\Desktop\OMR 프로그램.lnk\"); $s.TargetPath = '%~f0'; $s.WorkingDirectory = '%~dp0'; $s.IconLocation = \"$env:SystemRoot\System32\shell32.dll,13\"; $s.Description = 'OMR 프로그램 실행'; $s.Save()" >nul 2>&1
+powershell -NoProfile -Command "$s = (New-Object -ComObject WScript.Shell).CreateShortcut(\"$env:USERPROFILE\Desktop\ScoreLab.lnk\"); $s.TargetPath = '%~f0'; $s.WorkingDirectory = '%~dp0'; $s.IconLocation = \"$env:SystemRoot\System32\shell32.dll,13\"; $s.Description = 'ScoreLab 실행'; $s.Save()" >nul 2>&1
 
-echo [OMR] 시험지/학생 화면을 준비합니다(처음 실행이면 시간이 좀 더 걸릴 수 있어요).
+echo [ScoreLab] 시험지/학생 화면을 준비합니다(처음 실행이면 시간이 좀 더 걸릴 수 있어요).
 echo 이 창을 닫으면 프로그램도 종료됩니다.
 echo.
 
@@ -111,5 +111,5 @@ start "" /b powershell -NoProfile -WindowStyle Hidden -Command "$deadline = (Get
 call npm start
 
 echo.
-echo [OMR] 프로그램이 종료되었습니다.
+echo [ScoreLab] 종료되었습니다.
 timeout /t 2 >nul

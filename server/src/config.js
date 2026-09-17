@@ -9,12 +9,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // server/src/config.js -> project2/
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 
+// 데스크톱 패키징(electron/)판은 설치 폴더(Program Files 등)에 쓰기 권한이 없을 수 있어,
+// 실제 데이터는 OS별 사용자 데이터 폴더(예: %APPDATA%\ScoreLab)에 저장하고 그 경로를 이
+// 환경변수로 넘겨준다. 지정 안 하면(개발/실행하기.bat 실행) 기존과 동일하게 프로젝트
+// 폴더 밑 server/data를 그대로 쓴다.
+const dataDir = process.env.SCORELAB_DATA_DIR
+  ? path.resolve(process.env.SCORELAB_DATA_DIR)
+  : path.resolve(PROJECT_ROOT, 'server', 'data');
+
 export const config = {
   port: Number(process.env.PORT) || 4000,
   projectRoot: PROJECT_ROOT,
-  dataDir: path.resolve(PROJECT_ROOT, 'server', 'data'),
-  dbPath: path.resolve(PROJECT_ROOT, 'server', 'data', 'omr.sqlite3'),
-  uploadsDir: path.resolve(PROJECT_ROOT, 'server', 'data', 'uploads'),
+  dataDir,
+  dbPath: path.resolve(dataDir, 'omr.sqlite3'),
+  uploadsDir: path.resolve(dataDir, 'uploads'),
   clientDistDir: path.resolve(PROJECT_ROOT, 'client', 'dist'),
   curriculumStandardsPath: path.resolve(PROJECT_ROOT, 'curriculum', 'curriculum-standards.json'),
   aiProvider: process.env.AI_PROVIDER || 'gemini',

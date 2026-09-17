@@ -162,3 +162,15 @@ export function IconUndo(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+
+// ScoreLab 브랜드 마크 - 사이드바 상단 로고에만 쓴다. 점수를 분석하는 "랩(실험실)"이라는
+// 이름 그대로 플라스크 모양.
+export function IconFlask(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M9 3v5.2L4.6 16.8A2 2 0 0 0 6.4 19.8h11.2a2 2 0 0 0 1.8-3L15 8.2V3" />
+      <path d="M8.3 3h7.4" />
+      <path d="M6.8 14.5h10.4" />
+    </svg>
+  );
+}

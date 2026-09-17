@@ -1,23 +1,15 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { drawStroke, type Point, type PenTool, type Stroke } from '../lib/strokes';
 
-export type PenTool = 'pen' | 'eraser';
+export type { PenTool, Stroke, Point };
 
 export interface PenCanvasHandle {
   clear: () => void;
   undo: () => void;
-}
-
-interface Point {
-  x: number;
-  y: number;
-  pressure: number;
-}
-
-interface Stroke {
-  tool: PenTool;
-  color: string;
-  baseWidth: number;
-  points: Point[];
+  getStrokes: () => Stroke[];
+  // 필기 좌표는 이 캔버스의 CSS 픽셀 크기를 기준으로 저장돼 있다 - 나중에 다른 크기의
+  // 화면에서 다시 그릴 때 원래 비율대로 맞추려면 이 크기를 같이 저장해둬야 한다.
+  getCanvasSize: () => { width: number; height: number };
 }
 
 interface PenCanvasProps {
@@ -70,6 +62,12 @@ export const PenCanvas = forwardRef<PenCanvasHandle, PenCanvasProps>(function Pe
       redrawAll();
       onStrokesChange?.(strokesRef.current.length > 0);
     },
+    getStrokes() {
+      return strokesRef.current;
+    },
+    getCanvasSize() {
+      return sizeRef.current;
+    },
   }));
 
   // 컨테이너 크기에 맞춰 캔버스 backing store를 devicePixelRatio 기준으로 다시 잡는다.
@@ -104,47 +102,6 @@ export const PenCanvas = forwardRef<PenCanvasHandle, PenCanvasProps>(function Pe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, upToCount: number) {
-    const pts = stroke.points.slice(0, upToCount);
-    if (pts.length === 0) return;
-
-    ctx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
-    ctx.strokeStyle = stroke.color;
-
-    if (pts.length === 1) {
-      const p = pts[0];
-      const w = strokeWidthFor(stroke, p.pressure);
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, w / 2, 0, Math.PI * 2);
-      ctx.fillStyle = stroke.color;
-      ctx.fill();
-      return;
-    }
-
-    // 점들 중점을 이어 2차 베지어로 그리는 표준적인 손글씨 스무딩 기법.
-    for (let i = 1; i < pts.length; i++) {
-      const prev = pts[i - 1];
-      const cur = pts[i];
-      const midX = (prev.x + cur.x) / 2;
-      const midY = (prev.y + cur.y) / 2;
-      const prevMidX = i >= 2 ? (pts[i - 2].x + prev.x) / 2 : prev.x;
-      const prevMidY = i >= 2 ? (pts[i - 2].y + prev.y) / 2 : prev.y;
-
-      ctx.lineWidth = strokeWidthFor(stroke, cur.pressure);
-      ctx.beginPath();
-      ctx.moveTo(prevMidX, prevMidY);
-      ctx.quadraticCurveTo(prev.x, prev.y, midX, midY);
-      ctx.stroke();
-    }
-  }
-
-  function strokeWidthFor(stroke: Stroke, pressure: number) {
-    if (stroke.tool === 'eraser') return stroke.baseWidth * 6;
-    // pressure는 손가락/마우스에선 0(또는 미지원)일 수 있어 최소 굵기를 보장한다.
-    const p = pressure > 0 ? pressure : 0.5;
-    return stroke.baseWidth * (0.5 + p);
-  }
-
   function toLocalPoint(e: PointerEvent): Point {
     const rect = canvasRef.current!.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top, pressure: e.pressure };
@@ -178,6 +135,7 @@ export const PenCanvas = forwardRef<PenCanvasHandle, PenCanvasProps>(function Pe
         color,
         baseWidth,
         points: [toLocalPoint(e)],
+        startedAt: Date.now(),
       };
       activeStrokeRef.current = stroke;
       const ctx = ctxRef.current;

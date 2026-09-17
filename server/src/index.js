@@ -123,13 +123,13 @@ async function sweepTimedOutSessions() {
 setInterval(sweepTimedOutSessions, SWEEP_INTERVAL_MS);
 sweepTimedOutSessions();
 
-// listen()이 실패하면(주로 이미 다른 OMR 프로그램 창이 떠 있어서 포트가 사용 중일 때)
+// listen()이 실패하면(주로 이미 다른 ScoreLab 창이 떠 있어서 포트가 사용 중일 때)
 // 기본적으로 알아보기 힘든 스택 트레이스와 함께 그냥 죽어버린다. 원인을 바로 알 수 있게
 // 안내 메시지를 남기고 종료한다 - 실행하기.bat 창에 이 메시지가 그대로 남아 보인다.
 httpServer.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`\n[오류] 포트 ${config.port}번이 이미 사용 중입니다.`);
-    console.error('이미 실행 중인 OMR 프로그램 창이 있는지 확인해 주세요.');
+    console.error('이미 실행 중인 ScoreLab 창이 있는지 확인해 주세요.');
     console.error('그런 창이 없다면 컴퓨터를 재시작한 뒤 다시 실행해 주세요.\n');
     process.exit(1);
   }
@@ -138,7 +138,7 @@ httpServer.on('error', (err) => {
 
 httpServer.listen(config.port, '0.0.0.0', () => {
   const ip = getLanIp();
-  console.log(`OMR 서버 실행 중`);
+  console.log(`ScoreLab 서버 실행 중`);
   console.log(`  로컬:    http://localhost:${config.port}`);
   console.log(`  학생 접속용(같은 Wi-Fi): http://${ip}:${config.port}`);
 });

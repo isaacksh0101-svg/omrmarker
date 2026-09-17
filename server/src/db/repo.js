@@ -44,7 +44,9 @@ export async function getExamFull(id) {
 
 export async function listExams() {
   return db
-    .prepare('SELECT id, title, subject_id, grade_cluster, time_limit_sec, mode, status, started_at, created_at FROM exams ORDER BY created_at DESC')
+    .prepare(
+      'SELECT id, title, subject_id, grade_cluster, time_limit_sec, mode, status, memo, started_at, ends_at, created_at FROM exams ORDER BY created_at DESC',
+    )
     .all();
 }
 
@@ -55,6 +57,10 @@ export async function createExam({ title, subject_id, grade_cluster, time_limit_
     )
     .run(title, subject_id, grade_cluster, time_limit_sec, mode, now(), now());
   return result.lastInsertRowid;
+}
+
+export async function setExamMemo(id, memo) {
+  await db.prepare('UPDATE exams SET memo = ?, updated_at = ? WHERE id = ?').run(memo, now(), id);
 }
 
 export async function updateExam(id, { title, subject_id, grade_cluster, time_limit_sec, mode }) {
@@ -69,7 +75,19 @@ export async function updateExam(id, { title, subject_id, grade_cluster, time_li
 // 학생 응시 결과가 통째로 없어진다. "삭제"는 목록/감독 화면에서만 숨기는 보관 처리로
 // 구현해 결과는 시험별 리포트에서 계속 조회할 수 있게 한다.
 export async function archiveExam(id) {
-  await db.prepare("UPDATE exams SET status = 'archived', updated_at = ? WHERE id = ?").run(now(), id);
+  const exam = await db.prepare('SELECT status FROM exams WHERE id = ?').get(id);
+  await db
+    .prepare("UPDATE exams SET status = 'archived', archived_from_status = ?, updated_at = ? WHERE id = ?")
+    .run(exam?.status ?? 'finalized', now(), id);
+}
+
+// "다시 보이기" - 숨기기 전 상태로 복원한다. archived_from_status가 없는(이 컬럼이
+// 생기기 전에 숨겨진) 시험은 대부분 이미 확정되어 있었을 가능성이 높으므로 finalized로 되돌린다.
+export async function unarchiveExam(id) {
+  const exam = await db.prepare('SELECT archived_from_status FROM exams WHERE id = ?').get(id);
+  await db
+    .prepare("UPDATE exams SET status = ?, archived_from_status = NULL, updated_at = ? WHERE id = ?")
+    .run(exam?.archived_from_status ?? 'finalized', now(), id);
 }
 
 export async function finalizeExam(id) {
@@ -319,7 +337,7 @@ export async function markExamStarted(examId) {
 }
 
 // 교사가 감독 화면에서 "시험 전체 종료"를 누른 시각 - 감독 화면이 대기중/감독중/종료됨을
-// 구분하는 기준이 된다. "시험 재시작"을 누르면 clearExamEnded로 다시 NULL로 돌아간다.
+// 구분하는 기준이 된다. "시험 다시 열기"를 누르면 clearExamEnded로 다시 NULL로 돌아간다.
 export async function markExamEnded(examId) {
   await db.prepare('UPDATE exams SET ends_at = ?, updated_at = ? WHERE id = ?').run(now(), now(), examId);
 }
@@ -348,18 +366,6 @@ export async function endAllActiveSessions(examId) {
     .all(examId);
   for (const row of rows) {
     await finalizeSession(row.id, 'force_submitted', 'teacher_manual');
-  }
-  return rows.length;
-}
-
-// "시험 전체 종료"로 한 번에 강제 제출된 학생들을 다시 응시 중으로 한 번에 되돌린다.
-// 개별 revive와 동일하게, 이미 정상적으로 스스로 제출한(submitted) 학생은 건드리지 않는다.
-export async function reviveAllForceSubmittedSessions(examId) {
-  const rows = await db
-    .prepare("SELECT id FROM exam_sessions WHERE exam_id = ? AND status = 'force_submitted'")
-    .all(examId);
-  for (const row of rows) {
-    await reviveSession(row.id);
   }
   return rows.length;
 }
@@ -406,15 +412,29 @@ export async function createAnswerShown(sessionId, questionId, shownAt) {
     .run(sessionId, questionId, shownAt);
 }
 
-export async function submitAnswer(sessionId, questionId, { selectedChoiceId, shortAnswerText, answeredAt, timeSpentMs, isCorrect, awardedPoints }) {
+export async function submitAnswer(
+  sessionId,
+  questionId,
+  { selectedChoiceId, shortAnswerText, answeredAt, timeSpentMs, isCorrect, awardedPoints, strokesJson },
+) {
   await db
     .prepare(
       `UPDATE answers
        SET selected_choice_id = ?, short_answer_text = ?, answered_at = ?, time_spent_ms = ?,
-           is_correct = ?, awarded_points = ?
+           is_correct = ?, awarded_points = ?, strokes_json = ?
        WHERE session_id = ? AND question_id = ?`,
     )
-    .run(selectedChoiceId, shortAnswerText, answeredAt, timeSpentMs, isCorrect, awardedPoints, sessionId, questionId);
+    .run(
+      selectedChoiceId,
+      shortAnswerText,
+      answeredAt,
+      timeSpentMs,
+      isCorrect,
+      awardedPoints,
+      strokesJson ?? null,
+      sessionId,
+      questionId,
+    );
 }
 
 export async function advanceSession(sessionId, nextIndex) {
@@ -518,15 +538,16 @@ export async function finalizeSession(sessionId, status = 'submitted', reason = 
 
 // 강제 종료된 세션을 다시 응시 중으로 되돌린다("소명"을 받아들여 이어서 풀게 해주는
 // 절차). started_at을 지금 시각으로 다시 잡아서(이미 지난 시간 때문에 되살리자마자 바로
-// 시간 초과되는 일이 없게) 처음 제한시간만큼 새로 준다 - 그전에 받은 추가시간
-// (extra_time_sec)은 그대로 유지된다. 경고 횟수도 0으로 되돌려서, 되살리자마자 사소한
+// 시간 초과되는 일이 없게) 처음 제한시간만큼 새로 준다. 추가시간(extra_time_sec)은 그때
+// 그 응시에 한해 일시적으로 준 것이라 0으로 되돌린다 - 되살릴 때마다 이전에 받은 보너스가
+// 계속 쌓여 매번 다시 얹히는 걸 막기 위함. 경고 횟수도 0으로 되돌려서, 되살리자마자 사소한
 // 이탈 한 번에 다시 강제 종료되지 않게 한다.
 export async function reviveSession(sessionId) {
   await db
     .prepare(
       `UPDATE exam_sessions
        SET status = 'in_progress', started_at = ?, submitted_at = NULL, score = NULL, max_score = NULL,
-           warning_count = 0, disqualify_reason = NULL
+           warning_count = 0, disqualify_reason = NULL, extra_time_sec = 0
        WHERE id = ?`,
     )
     .run(now(), sessionId);
@@ -551,10 +572,10 @@ export async function getMonitorStudents(examId) {
 
 // 학생이 지금까지 답한 문항 이력(문제 내용 포함) - 감독 화면에서 "화면 확인"용.
 export async function getSessionAnswerHistory(sessionId) {
-  return db
+  const rows = await db
     .prepare(
       `SELECT q.order_index, q.type, q.prompt, a.selected_choice_id, c.text AS selected_choice_text,
-              a.short_answer_text, a.is_correct, a.awarded_points, a.time_spent_ms, a.answered_at
+              a.short_answer_text, a.is_correct, a.awarded_points, a.time_spent_ms, a.answered_at, a.strokes_json
        FROM answers a
        JOIN questions q ON q.id = a.question_id
        LEFT JOIN choices c ON c.id = a.selected_choice_id
@@ -562,6 +583,26 @@ export async function getSessionAnswerHistory(sessionId) {
        ORDER BY q.order_index`,
     )
     .all(sessionId);
+  return rows.map(({ strokes_json, ...rest }) => ({
+    ...rest,
+    strokes: strokes_json ? JSON.parse(strokes_json) : null,
+  }));
+}
+
+// 학생별 리포트에서 "이 학생이 응시한 시험들" 목록을 보여주기 위한 조회 - 실제로 제출까지
+// 된 것만(참여만 하고 안 푼 건 리포트로서 의미가 없음) 최신순으로.
+export async function getExamsForRollNumber(rollNumber) {
+  return db
+    .prepare(
+      `SELECT e.id AS exam_id, e.title, e.subject_id, e.grade_cluster, es.id AS session_id, es.status,
+              es.score, es.max_score, es.submitted_at,
+              (SELECT COUNT(*) FROM questions WHERE exam_id = e.id) AS question_count
+       FROM exam_sessions es
+       JOIN exams e ON e.id = es.exam_id
+       WHERE es.roll_number = ? AND es.status IN ('submitted', 'force_submitted')
+       ORDER BY es.submitted_at DESC`,
+    )
+    .all(rollNumber);
 }
 
 // ---- 교사용 결과 집계 ----
@@ -569,7 +610,7 @@ export async function getSessionAnswerHistory(sessionId) {
 export async function getResultsForExam(examId) {
   const sessions = await db
     .prepare(
-      `SELECT es.roll_number, r.name, es.status, es.score, es.max_score, es.submitted_at, es.warning_count,
+      `SELECT es.id AS session_id, es.roll_number, r.name, es.status, es.score, es.max_score, es.submitted_at,
               (SELECT COALESCE(SUM(a.time_spent_ms), 0) FROM answers a WHERE a.session_id = es.id) AS total_time_ms
        FROM exam_sessions es
        LEFT JOIN roster r ON r.roll_number = es.roll_number

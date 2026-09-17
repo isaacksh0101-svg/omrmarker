@@ -47,6 +47,12 @@ sessionsRouter.post('/:id/sessions', async (req, res) => {
   if (!exam || exam.status !== 'finalized') {
     return res.status(400).json({ error: '응시할 수 있는 시험이 아닙니다.' });
   }
+  // 교사가 "시험 전체 종료"를 누른 뒤에는 새로 참여를 시도해도 들어올 수 없다 - "시험
+  // 다시 열기"를 눌러야 다시 참여할 수 있다. 이미 참여해 진행 중이던 학생은(이 라우트를
+  // 다시 타지 않으므로) 영향받지 않는다.
+  if (exam.ends_at) {
+    return res.status(400).json({ error: '선생님이 시험을 종료했습니다. 다시 열릴 때까지 기다려주세요.' });
+  }
 
   const rollNumber = Number(req.body.roll_number);
   if (!Number.isInteger(rollNumber)) {
@@ -138,18 +144,17 @@ sessionsRouter.post('/:id/end-all', async (req, res) => {
   res.json({ ended });
 });
 
-// 교사가 '시험 감독' 화면에서 누른다. "시험 전체 종료"로 한 번에 강제 제출됐던 학생
-// 전원을 한 번에 다시 응시 중으로 되돌리고(시험 재시작), 감독 화면도 다시 "감독중"으로
-// 돌아가도록 exams.ends_at을 지운다. 스스로 제출을 마친(submitted) 학생은 대상에서 제외된다.
-sessionsRouter.post('/:id/revive-all', async (req, res) => {
+// 교사가 '시험 감독' 화면에서 누른다. 시험 참여/응시 "접근"만 다시 열어준다(exams.ends_at
+// 제거) - 강제 종료됐던 학생 개개인을 응시 중으로 되돌리는 것과는 별개다(그건 학생 카드의
+// "되살리기"로 한다). 이후 새로 참여하는 학생부터 다시 받을 수 있게 된다.
+sessionsRouter.post('/:id/reopen', async (req, res) => {
   const examId = Number(req.params.id);
   const exam = await repo.getExam(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
 
-  const revived = await repo.reviveAllForceSubmittedSessions(examId);
   await repo.clearExamEnded(examId);
   emitExamMonitorUpdate(examId);
-  res.json({ revived });
+  res.status(204).end();
 });
 
 function isTimedOut(session, exam) {
@@ -275,6 +280,28 @@ sessionsRouter.post('/:id/sessions/:sessionId/answers', async (req, res) => {
   const answeredAt = now();
   const timeSpentMs = Date.now() - new Date(answerRow.shown_at).getTime();
 
+  // 필기(strokes)는 교사가 나중에 풀이과정을 다시 볼 수 있도록 그대로 저장한다. 다만
+  // 비정상적으로 긴 필기(악의적 페이로드 포함)로 DB가 부풀지 않도록, 문항 하나당 넉넉한
+  // 점 개수(획 전체 합산 4만 개 - 몇 페이지를 빼곡히 채워도 남는 여유)에서 잘라낸다.
+  // 문자열을 그냥 자르면 JSON이 깨지므로, stroke 단위로 담다가 상한에 닿으면 멈춘다.
+  // 좌표는 캡처 당시 캔버스 크기(width/height) 기준이라, 나중에 다른 크기 화면에서 같은
+  // 비율로 다시 그리려면 그 크기도 같이 저장해야 한다.
+  const MAX_STROKE_POINTS = 40_000;
+  const rawStrokes = Array.isArray(req.body.strokes) ? req.body.strokes : [];
+  const canvasSize = req.body.strokes_canvas_size;
+  const cappedStrokes = [];
+  let pointCount = 0;
+  for (const stroke of rawStrokes) {
+    const points = Array.isArray(stroke?.points) ? stroke.points.length : 0;
+    if (pointCount + points > MAX_STROKE_POINTS) break;
+    cappedStrokes.push(stroke);
+    pointCount += points;
+  }
+  const strokesJson =
+    cappedStrokes.length > 0 && Number(canvasSize?.width) > 0 && Number(canvasSize?.height) > 0
+      ? JSON.stringify({ width: canvasSize.width, height: canvasSize.height, strokes: cappedStrokes })
+      : null;
+
   await repo.submitAnswer(sessionId, questionId, {
     selectedChoiceId,
     shortAnswerText,
@@ -282,6 +309,7 @@ sessionsRouter.post('/:id/sessions/:sessionId/answers', async (req, res) => {
     timeSpentMs,
     isCorrect,
     awardedPoints,
+    strokesJson,
   });
 
   // 지금 답한 문항이 1차 진행 중인 "현재" 문항이면 다음으로 넘어간다. 건너뛰었다가 복습

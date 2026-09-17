@@ -11,6 +11,12 @@ CREATE TABLE IF NOT EXISTS exams (
   -- online: 학생이 화면에서 문제를 읽고 풂 / paper_marking: 학생은 종이 시험지를 보고 이 앱에는 답만 마킹
   mode TEXT NOT NULL DEFAULT 'online' CHECK(mode IN ('online','paper_marking')),
   status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','finalized','archived')),
+  -- 숨기기(archived) 직전의 상태를 기억해둔다 - "다시 보이기"를 눌렀을 때 draft였던
+  -- 시험이 finalized로 잘못 복원되는(또는 반대) 일이 없도록 원래 상태로 되돌리기 위함.
+  archived_from_status TEXT,
+  -- 제목은 자유롭게 두되, 쌓인 시험지 중에서 알아보기 위한 짧은 메모(교사만 봄,
+  -- 학생에게는 노출 안 됨). 관리 화면에서만 채워 넣는다.
+  memo TEXT,
   started_at TEXT,
   -- 교사가 감독 화면에서 "시험 전체 종료"를 눌러 실제로 끝낸 시각. "시험 재시작"을
   -- 누르면 다시 NULL로 돌아간다 - 감독 화면이 대기중/감독중/종료됨을 구분하는 기준.
@@ -104,6 +110,10 @@ CREATE TABLE IF NOT EXISTS answers (
   time_spent_ms INTEGER,
   is_correct INTEGER,
   awarded_points REAL,
+  -- 이 문항을 풀 때 남긴 필기(S-Pen/손가락) 원본 - 획 좌표 배열을 JSON으로 그대로 저장한다.
+  -- 답만으론 안 보이는 풀이 과정(시도했는지, 어디서 막혔는지)을 나중에 리포트에서 다시
+  -- 그려볼 수 있게 하기 위함. 필기가 없으면 NULL.
+  strokes_json TEXT,
   UNIQUE(session_id, question_id)
 );
 CREATE INDEX IF NOT EXISTS idx_answers_session ON answers(session_id);

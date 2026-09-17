@@ -28,6 +28,12 @@ const examColumns = db.prepare('PRAGMA table_info(exams)').all().map((c) => c.na
 if (!examColumns.includes('mode')) {
   db.exec("ALTER TABLE exams ADD COLUMN mode TEXT NOT NULL DEFAULT 'online'");
 }
+if (!examColumns.includes('archived_from_status')) {
+  db.exec('ALTER TABLE exams ADD COLUMN archived_from_status TEXT');
+}
+if (!examColumns.includes('memo')) {
+  db.exec('ALTER TABLE exams ADD COLUMN memo TEXT');
+}
 
 const sessionColumns = db.prepare('PRAGMA table_info(exam_sessions)').all().map((c) => c.name);
 if (!sessionColumns.includes('extra_time_sec')) {
@@ -46,4 +52,9 @@ if (!questionColumns.includes('prompt_image_path')) {
 }
 if (!questionColumns.includes('ai_standard_candidates')) {
   db.exec('ALTER TABLE questions ADD COLUMN ai_standard_candidates TEXT');
+}
+
+const answerColumns = db.prepare('PRAGMA table_info(answers)').all().map((c) => c.name);
+if (!answerColumns.includes('strokes_json')) {
+  db.exec('ALTER TABLE answers ADD COLUMN strokes_json TEXT');
 }

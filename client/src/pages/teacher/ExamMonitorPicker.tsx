@@ -19,10 +19,11 @@ export function ExamMonitorPicker() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    api
-      .get<Exam[]>('/exams')
-      .then(setExams)
-      .finally(() => setLoaded(true));
+    const load = () => api.get<Exam[]>('/exams').then(setExams).finally(() => setLoaded(true));
+    load();
+    // 목록에 머무는 동안에도 감독중 표시가 최신 상태를 보여주도록 주기적으로 새로고침한다.
+    const interval = setInterval(load, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const monitorable = exams.filter((e) => e.status === 'finalized');
@@ -49,7 +50,15 @@ export function ExamMonitorPicker() {
             onClick={() => navigate(`/exam-monitor/${exam.id}`)}
           >
             <div>
-              <p className="text-sm font-bold text-ink">{exam.title}</p>
+              <div className="flex items-center gap-1.5">
+                <span
+                  className={`h-2 w-2 shrink-0 rounded-full transition-colors duration-300 ${
+                    exam.started_at && !exam.ends_at ? 'bg-good' : 'bg-line'
+                  }`}
+                  title={exam.started_at && !exam.ends_at ? '감독중' : '감독중 아님'}
+                />
+                <p className="text-sm font-bold text-ink">{exam.title}</p>
+              </div>
               <p className="mt-0.5 text-xs text-ink-soft">
                 {GRADE_LABEL[exam.grade_cluster] || exam.grade_cluster} · {exam.subject_id} ·{' '}
                 {Math.round(exam.time_limit_sec / 60)}분

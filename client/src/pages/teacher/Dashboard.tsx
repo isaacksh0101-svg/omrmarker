@@ -4,7 +4,6 @@ import { api, ApiError } from '../../api/client';
 import type { Exam, Subject } from '../../types';
 import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
-import { Badge } from '../../components/Badge';
 import { PageHeader } from '../../components/PageHeader';
 import { IconDashboard } from '../../components/icons';
 import { displaySubjectName } from '../../lib/subjectName';
@@ -13,12 +12,6 @@ const GRADE_LABEL: Record<string, string> = {
   elem_1_2: '1~2학년군',
   elem_3_4: '3~4학년군',
   elem_5_6: '5~6학년군',
-};
-
-const STATUS_BADGE: Record<Exam['status'], { label: string; tone: 'neutral' | 'good' }> = {
-  draft: { label: '작성 중', tone: 'neutral' },
-  finalized: { label: '확정됨', tone: 'good' },
-  archived: { label: '보관됨', tone: 'neutral' },
 };
 
 export function Dashboard() {
@@ -96,20 +89,21 @@ export function Dashboard() {
     }
   }
 
-  const visibleExams = exams.filter(
-    (exam) => exam.status !== 'archived' && (subjectFilter === 'all' || exam.subject_id === subjectFilter),
+  // 만들기 화면에는 아직 작성 중인 시험만 둔다 - 확정된 뒤에는 "시험지 관리" 화면에서
+  // 찾아 쓴다. 그래야 오래 쓰다 보면 쌓이는 지난 시험지들이 여기서 어지럽히지 않는다.
+  const draftExams = exams.filter((exam) => exam.status === 'draft');
+  const visibleExams = draftExams.filter(
+    (exam) => subjectFilter === 'all' || exam.subject_id === subjectFilter,
   );
 
   // 시험지가 하나도 없는 과목까지 필터에 다 늘어놓으면 정작 쓸 수 있는 과목은 적은데도
   // 목록이 길어져 찾기 불편하다 - 실제로 시험이 있는 과목만 골라서 보여준다.
-  const activeSubjectIds = new Set(
-    exams.filter((exam) => exam.status !== 'archived').map((exam) => exam.subject_id),
-  );
+  const activeSubjectIds = new Set(draftExams.map((exam) => exam.subject_id));
   const usedSubjects = subjects.filter((s) => activeSubjectIds.has(s.subject_id));
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      <PageHeader icon={IconDashboard} title="시험지 관리" />
+      <PageHeader icon={IconDashboard} title="시험지 만들기" />
 
       <Card className="animate-fade-in-up mt-7">
         <h2 className="text-sm font-bold text-ink">새 시험 만들기</h2>
@@ -198,9 +192,9 @@ export function Dashboard() {
 
       <div className="animate-fade-in-up mt-9" style={{ animationDelay: '60ms' }}>
         <div className="flex items-center justify-between gap-2">
-          <h2 className="text-sm font-bold text-ink">시험 목록</h2>
+          <h2 className="text-sm font-bold text-ink">작성 중인 시험</h2>
           {!selectMode ? (
-            exams.length > 0 && (
+            draftExams.length > 0 && (
               <button
                 className="text-xs font-bold text-ink-soft hover:text-ink"
                 onClick={() => setSelectMode(true)}
@@ -216,6 +210,7 @@ export function Dashboard() {
               </button>
               <Button
                 variant="danger"
+                size="sm"
                 disabled={selectedIds.size === 0 || bulkDeleting}
                 onClick={bulkDelete}
               >
@@ -240,8 +235,8 @@ export function Dashboard() {
           </select>
         )}
 
-        {exams.length === 0 ? (
-          <p className="mt-3 text-sm text-ink-soft">아직 만든 시험이 없습니다.</p>
+        {draftExams.length === 0 ? (
+          <p className="mt-3 text-sm text-ink-soft">아직 작성 중인 시험이 없습니다.</p>
         ) : visibleExams.length === 0 ? (
           <p className="mt-3 text-sm text-ink-soft">이 교과로 만든 시험이 없습니다.</p>
         ) : (
@@ -279,20 +274,6 @@ export function Dashboard() {
                         {exam.mode === 'paper_marking' ? '종이+마킹' : '온라인'}
                       </p>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {!selectMode && exam.status === 'finalized' && (
-                      <button
-                        className="text-xs font-bold text-accent hover:underline"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/exams/${exam.id}/results`);
-                        }}
-                      >
-                        결과 보기
-                      </button>
-                    )}
-                    <Badge tone={STATUS_BADGE[exam.status].tone}>{STATUS_BADGE[exam.status].label}</Badge>
                   </div>
                 </Card>
               );
