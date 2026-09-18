@@ -5,6 +5,9 @@ electron/release/
 server/data/*.sqlite3
 server/data/uploads/*
 !server/data/uploads/.gitkeep
+server/data/settings.json
+server/data/.settings.key
+server/data/logs/
 .env
 .env.local
 server/firebase-service-account.json

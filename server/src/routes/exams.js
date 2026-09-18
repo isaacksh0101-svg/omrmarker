@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import * as repo from '../db/repo.js';
 import { upload } from '../middleware/upload.js';
 import { getStandardByCode } from '../services/curriculumStandards.js';
+import { requireAuth } from '../middleware/auth.js';
 
 export const examsRouter = Router();
 
@@ -20,11 +21,11 @@ export async function getExamFull(id) {
 
 // ---- 시험 CRUD ----
 
-examsRouter.get('/', async (_req, res) => {
+examsRouter.get('/', requireAuth, async (_req, res) => {
   res.json(await repo.listExams());
 });
 
-examsRouter.post('/', async (req, res) => {
+examsRouter.post('/', requireAuth, async (req, res) => {
   const { title, subject_id, grade_cluster, time_limit_sec } = req.body;
   const mode = req.body.mode === 'paper_marking' ? 'paper_marking' : 'online';
   if (!title || !subject_id || !grade_cluster || !Number.isInteger(time_limit_sec)) {
@@ -34,13 +35,34 @@ examsRouter.post('/', async (req, res) => {
   res.status(201).json(await repo.getExamFull(id));
 });
 
-examsRouter.get('/:id', async (req, res) => {
+// 학생이 시험 참여 화면에서 "응시 가능한 시험"을 고를 때 쓴다 - 로그인 없이 봐야 하므로
+// 이 라우터의 다른 라우트와 달리 requireAuth를 붙이지 않는다. 그래서 교사 메모(memo)나
+// 아직 확정 전(draft)/숨긴(archived) 시험처럼 학생에게 필요 없는 정보는 아예 빼고 내려준다.
+// (GET /:id 보다 먼저 등록해야 한다 - 안 그러면 '/for-student'가 :id로 잡혀서 이 라우트에
+// 닿기 전에 위의 로그인 검사에 걸린다.)
+examsRouter.get('/for-student', async (_req, res) => {
+  const exams = await repo.listExams();
+  res.json(
+    exams
+      .filter((e) => e.status === 'finalized')
+      .map((e) => ({
+        id: e.id,
+        title: e.title,
+        subject_id: e.subject_id,
+        grade_cluster: e.grade_cluster,
+        time_limit_sec: e.time_limit_sec,
+        mode: e.mode,
+      })),
+  );
+});
+
+examsRouter.get('/:id', requireAuth, async (req, res) => {
   const exam = await repo.getExamFull(Number(req.params.id));
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
   res.json(exam);
 });
 
-examsRouter.put('/:id', async (req, res) => {
+examsRouter.put('/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   const exam = await repo.getExam(id);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
@@ -57,7 +79,7 @@ examsRouter.put('/:id', async (req, res) => {
 
 // 관리 화면에서만 쓰는 교사용 메모(학생에게는 노출 안 됨) - 제목은 자유롭게 두고
 // 쌓인 시험지를 구분할 짧은 설명만 따로 붙일 수 있게 한다.
-examsRouter.put('/:id/memo', async (req, res) => {
+examsRouter.put('/:id/memo', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   const exam = await repo.getExam(id);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
@@ -69,7 +91,7 @@ examsRouter.put('/:id/memo', async (req, res) => {
 
 // 시험지 삭제: 실제로는 보관(archived) 처리만 해서 목록에서 감추고, 이미 쌓인 학생
 // 응시 결과(exam_sessions/answers)는 그대로 남겨 시험별 리포트에서 계속 볼 수 있게 한다.
-examsRouter.delete('/:id', async (req, res) => {
+examsRouter.delete('/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   const exam = await repo.getExam(id);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
@@ -79,7 +101,7 @@ examsRouter.delete('/:id', async (req, res) => {
 });
 
 // 숨기기 취소("다시 보이기") - 목록에서 다시 보이도록 숨기기 전 상태로 복원한다.
-examsRouter.post('/:id/unarchive', async (req, res) => {
+examsRouter.post('/:id/unarchive', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   const exam = await repo.getExam(id);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
@@ -91,7 +113,7 @@ examsRouter.post('/:id/unarchive', async (req, res) => {
 
 // 시험별 리포트 화면에서 쓰는 진짜 영구 삭제. 응시 기록까지 전부 사라지므로 되돌릴 수
 // 없다 - 테스트/오입력 등으로 남은 필요 없는 시험을 완전히 치울 때만 쓴다.
-examsRouter.delete('/:id/permanent', async (req, res) => {
+examsRouter.delete('/:id/permanent', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   const exam = await repo.getExam(id);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
@@ -102,7 +124,7 @@ examsRouter.delete('/:id/permanent', async (req, res) => {
 
 // ---- 문항 CRUD ----
 
-examsRouter.post('/:id/questions', async (req, res) => {
+examsRouter.post('/:id/questions', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const exam = await repo.getExam(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
@@ -120,7 +142,7 @@ examsRouter.post('/:id/questions', async (req, res) => {
 
 // 종이 시험지 "틀 만들기": 객관식(4/5지선다)·단답형 개수만 받아 한 번에 문항을 생성한다.
 // 정답은 아직 정하지 않는다 - 이후 "정답 입력" 단계에서 채운다.
-examsRouter.post('/:id/questions/batch', async (req, res) => {
+examsRouter.post('/:id/questions/batch', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const exam = await repo.getExam(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
@@ -137,7 +159,7 @@ examsRouter.post('/:id/questions/batch', async (req, res) => {
 });
 
 // 문항 순서를 드래그로 바꾼 뒤 저장. order는 이 시험의 문항 id를 새 순서로 나열한 배열.
-examsRouter.put('/:id/questions/reorder', async (req, res) => {
+examsRouter.put('/:id/questions/reorder', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const exam = await repo.getExam(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
@@ -163,7 +185,7 @@ async function getQuestionOr404(examId, questionId, res) {
   return q;
 }
 
-examsRouter.put('/:id/questions/:qid', async (req, res) => {
+examsRouter.put('/:id/questions/:qid', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const qid = Number(req.params.qid);
   const question = await getQuestionOr404(examId, qid, res);
@@ -178,7 +200,7 @@ examsRouter.put('/:id/questions/:qid', async (req, res) => {
   res.json(full.questions.find((q) => q.id === qid));
 });
 
-examsRouter.delete('/:id/questions/:qid', async (req, res) => {
+examsRouter.delete('/:id/questions/:qid', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const qid = Number(req.params.qid);
   await repo.deleteQuestion(examId, qid);
@@ -189,7 +211,7 @@ examsRouter.delete('/:id/questions/:qid', async (req, res) => {
 // 원본 PDF/이미지를 다시 골라 영역을 선택해 자른 결과(PNG)만 여기로 올린다. 원본 파일
 // 자체는 서버로 전송되지 않고 클라이언트에서 이미 잘린 이미지만 받으므로, 서버가 시험지
 // 원본을 계속 보관할 필요가 없다.
-examsRouter.post('/:id/questions/:qid/prompt-image', upload.single('image'), async (req, res) => {
+examsRouter.post('/:id/questions/:qid/prompt-image', requireAuth, upload.single('image'), async (req, res) => {
   const examId = Number(req.params.id);
   const qid = Number(req.params.qid);
   const question = await getQuestionOr404(examId, qid, res);
@@ -220,7 +242,7 @@ examsRouter.post('/:id/questions/:qid/prompt-image', upload.single('image'), asy
 
 // ---- 보기(객관식) ----
 
-examsRouter.put('/:id/questions/:qid/choices', async (req, res) => {
+examsRouter.put('/:id/questions/:qid/choices', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const qid = Number(req.params.qid);
   const question = await getQuestionOr404(examId, qid, res);
@@ -238,7 +260,7 @@ examsRouter.put('/:id/questions/:qid/choices', async (req, res) => {
 
 // ---- 정답(단답형) ----
 
-examsRouter.put('/:id/questions/:qid/answer', async (req, res) => {
+examsRouter.put('/:id/questions/:qid/answer', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const qid = Number(req.params.qid);
   const question = await getQuestionOr404(examId, qid, res);
@@ -256,7 +278,7 @@ examsRouter.put('/:id/questions/:qid/answer', async (req, res) => {
 
 // ---- 성취기준 태깅 ----
 
-examsRouter.put('/:id/questions/:qid/standards', async (req, res) => {
+examsRouter.put('/:id/questions/:qid/standards', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const qid = Number(req.params.qid);
   const question = await getQuestionOr404(examId, qid, res);
@@ -279,7 +301,7 @@ examsRouter.put('/:id/questions/:qid/standards', async (req, res) => {
 
 // ---- 확정(finalize) ----
 
-examsRouter.post('/:id/finalize', async (req, res) => {
+examsRouter.post('/:id/finalize', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const exam = await repo.getExamFull(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });

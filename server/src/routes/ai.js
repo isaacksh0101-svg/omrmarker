@@ -4,6 +4,7 @@ import { upload } from '../middleware/upload.js';
 import { extractAnswerKeyFromImage, extractQuestionsFromImage } from '../services/aiExtraction.js';
 import { cropQuestionImages } from '../services/cropQuestionImages.js';
 import { renderPdfToImages } from '../services/renderPdfPages.js';
+import { requireAuth } from '../middleware/auth.js';
 
 export const aiRouter = Router();
 
@@ -20,7 +21,7 @@ async function extractFromSingleImage(imageBuffer, mimeType, exam, orderOffset) 
   return withImages.map((q, i) => ({ ...q, order_index: orderOffset + i }));
 }
 
-aiRouter.post('/:id/ai-extract', upload.single('file'), async (req, res) => {
+aiRouter.post('/:id/ai-extract', requireAuth, upload.single('file'), async (req, res) => {
   const examId = Number(req.params.id);
   const exam = await repo.getExam(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
@@ -59,7 +60,7 @@ async function extractAnswersFromSingleImage(imageBuffer, mimeType, questionInfo
   });
 }
 
-aiRouter.post('/:id/ai-extract-answers', upload.single('file'), async (req, res) => {
+aiRouter.post('/:id/ai-extract-answers', requireAuth, upload.single('file'), async (req, res) => {
   const examId = Number(req.params.id);
   const exam = await repo.getExamFull(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });

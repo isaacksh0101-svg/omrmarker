@@ -29,12 +29,21 @@ function formatTime(sec: number) {
 // 경고가 보여야 모든 학생이 시작 전에 한 번은 보게 된다.
 function AntiCheatNotice() {
   return (
-    <div className="mt-6 max-w-sm rounded-xl border border-danger/30 bg-danger/5 px-4 py-3 text-left">
-      <p className="text-sm font-bold text-danger">시험 중 다른 화면으로 이동하면 안 됩니다</p>
-      <p className="mt-1 text-xs text-ink-soft">
-        탭 전환, 창 전환, 최소화 등으로 화면을 벗어나는 순간 그 즉시 시험이 강제로 종료됩니다. 실수로
-        종료됐다면 선생님께 바로 말씀해주세요.
-      </p>
+    <div className="mt-6 max-w-sm space-y-3 rounded-xl border border-danger/30 bg-danger/5 px-4 py-3 text-left">
+      <div>
+        <p className="text-sm font-bold text-danger">시험 중 다른 화면으로 이동하면 안 됩니다</p>
+        <p className="mt-1 text-xs text-ink-soft">
+          탭 전환, 창 전환, 최소화 등으로 화면을 벗어나는 순간 그 즉시 시험이 강제로 종료됩니다. 실수로
+          종료됐다면 선생님께 바로 말씀해주세요.
+        </p>
+      </div>
+      <div className="border-t border-danger/15 pt-3">
+        <p className="text-xs font-bold text-ink">시험 데이터 처리 안내</p>
+        <p className="mt-1 text-xs leading-relaxed text-ink-soft">
+          출석번호, 답안, 점수, 문항별 소요시간, 필기와 화면 이탈 기록은 시험 운영·채점·학습분석을 위해
+          선생님 PC에 저장되며 학기 말에 삭제됩니다. 열람·정정·삭제가 필요하면 담당 선생님께 요청하세요.
+        </p>
+      </div>
     </div>
   );
 }
@@ -71,7 +80,7 @@ export function TakeExam() {
   const { examId } = useParams();
   const navigate = useNavigate();
   const id = Number(examId);
-  const sessionId = Number(localStorage.getItem(`omr_session_${id}`));
+  const sessionId = localStorage.getItem(`omr_session_${id}`) ?? '';
 
   // 한 세션 안에서 이탈 감지로 인한 강제 제출 요청을 중복으로 여러 번 보내지 않기 위한
   // 가드 - blur와 visibilitychange, fullscreenchange가 같은 탭 전환에 대해 거의 동시에
@@ -141,7 +150,7 @@ export function TakeExam() {
   }, [id, sessionId, reloadSession, loadPending]);
 
   useEffect(() => {
-    if (!Number.isInteger(sessionId)) {
+    if (!sessionId) {
       navigate('/student');
       return;
     }

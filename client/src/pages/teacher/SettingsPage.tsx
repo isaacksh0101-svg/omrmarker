@@ -295,6 +295,243 @@ function BackupSection() {
   );
 }
 
+type GeminiModel = {
+  id: string;
+  name: string;
+  description: string;
+  costProfile: 'economy' | 'balanced' | 'performance';
+  preview: boolean;
+};
+
+type GeminiModelCatalog = {
+  fetchedAt: number;
+  models: GeminiModel[];
+  stale: boolean;
+  warning?: string;
+};
+
+const COST_PROFILES = [
+  { key: 'economy', label: '비용 최소', description: '사용량이 많거나 빠른 처리가 필요할 때' },
+  { key: 'balanced', label: '균형형 · 추천', description: '시험지 분석의 속도와 성능 균형' },
+  { key: 'performance', label: '고성능', description: '복잡한 문항 분석에 유리하며 비용 주의' },
+] as const;
+
+function AiSettingsSection() {
+  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
+  const [apiKey, setApiKey] = useState('');
+  const [models, setModels] = useState<GeminiModel[]>([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [modelsFetchedAt, setModelsFetchedAt] = useState<number | null>(null);
+  const [modelsStale, setModelsStale] = useState(false);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [showKey, setShowKey] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function loadModels(force = false) {
+    setLoadingModels(true);
+    setError(null);
+    try {
+      const suffix = force ? '?refresh=1' : '';
+      const catalog = await api.get<GeminiModelCatalog>(`/settings/ai/models${suffix}`);
+      setModels(catalog.models);
+      setModelsFetchedAt(catalog.fetchedAt);
+      setModelsStale(catalog.stale);
+      setSelectedModel((current) =>
+        catalog.models.some((model) => model.id === current) ? current : catalog.models[0]?.id || '',
+      );
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '모델 목록을 불러오지 못했습니다.');
+    } finally {
+      setLoadingModels(false);
+    }
+  }
+
+  useEffect(() => {
+    api
+      .get<{ hasApiKey: boolean; model: string }>('/settings/ai')
+      .then((r) => {
+        setHasApiKey(r.hasApiKey);
+        setSelectedModel(r.model);
+        if (r.hasApiKey) void loadModels();
+      })
+      .catch(() => setHasApiKey(false));
+  }, []);
+
+  async function save() {
+    const trimmed = apiKey.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await api.put('/settings/ai', { apiKey: trimmed });
+      setHasApiKey(true);
+      setApiKey('');
+      setSaved(true);
+      await loadModels(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '저장 중 오류가 발생했습니다.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveModel() {
+    if (!selectedModel) return;
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await api.put('/settings/ai', { model: selectedModel });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '모델 저장 중 오류가 발생했습니다.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const currentModel = models.find((model) => model.id === selectedModel);
+
+  return (
+    <Card className="mt-6">
+      <h2 className="text-sm font-bold text-ink">AI 설정</h2>
+      <p className="mt-1 text-xs text-ink-soft">
+        문항 자동 추출 등 AI 기능을 쓰려면 Gemini API 키가 필요합니다.
+      </p>
+      {hasApiKey && (
+        <p className="mt-2 text-xs font-bold text-good">현재 키가 설정되어 있습니다. 새로 입력하면 교체됩니다.</p>
+      )}
+      <div className="mt-3 flex gap-2">
+        <input
+          type={showKey ? 'text' : 'password'}
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save();
+          }}
+          placeholder="AIza..."
+          autoComplete="off"
+          className="min-w-0 flex-1 rounded-lg border border-line px-2.5 py-1.5 text-xs"
+        />
+        <button
+          type="button"
+          onClick={() => setShowKey((v) => !v)}
+          className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-xs text-ink-soft"
+        >
+          {showKey ? '숨기기' : '표시'}
+        </button>
+      </div>
+      <div className="mt-2.5 flex items-center justify-between">
+        <a
+          href="https://aistudio.google.com/apikey"
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs text-accent-ink underline"
+        >
+          API 키 발급받기 (Google AI Studio)
+        </a>
+        <Button variant="secondary" disabled={saving || !apiKey.trim()} onClick={save}>
+          {saving ? '저장 중...' : '키 저장'}
+        </Button>
+      </div>
+      {hasApiKey && (
+        <div className="mt-5 border-t border-line pt-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold text-ink">분석 모델</h3>
+              <p className="mt-1 text-xs text-ink-soft">
+                현재 API 키에서 사용할 수 있는 모델만 표시하며, 목록은 12시간마다 자동 갱신됩니다.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={loadingModels}
+              onClick={() => void loadModels(true)}
+              className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-xs font-bold text-ink-soft disabled:opacity-50"
+            >
+              {loadingModels ? '확인 중...' : '새로고침'}
+            </button>
+          </div>
+
+          {models.length > 0 && (
+            <>
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="mt-3 w-full rounded-xl border border-line bg-white px-3 py-2.5 text-sm text-ink"
+              >
+                {COST_PROFILES.map((profile) => {
+                  const options = models.filter((model) => model.costProfile === profile.key);
+                  if (options.length === 0) return null;
+                  return (
+                    <optgroup key={profile.key} label={`${profile.label} — ${profile.description}`}>
+                      {options.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.name}{model.preview ? ' (미리보기)' : ''}
+                        </option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
+              </select>
+
+              {currentModel && (
+                <div className="mt-2 rounded-xl bg-bg px-3 py-2.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="rounded-md bg-accent-soft px-2 py-0.5 text-xs font-bold text-accent-ink">
+                      {COST_PROFILES.find((profile) => profile.key === currentModel.costProfile)?.label}
+                    </span>
+                    {currentModel.preview && (
+                      <span className="rounded-md bg-warning/15 px-2 py-0.5 text-xs font-bold text-warning">
+                        미리보기 모델
+                      </span>
+                    )}
+                  </div>
+                  {currentModel.description && (
+                    <p className="mt-1.5 text-xs leading-relaxed text-ink-soft">{currentModel.description}</p>
+                  )}
+                  <p className="mt-1 text-[11px] text-ink-soft">모델 ID: {currentModel.id}</p>
+                </div>
+              )}
+
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs text-ink-soft">
+                  <a
+                    href="https://ai.google.dev/gemini-api/docs/pricing"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-bold text-accent-ink underline"
+                  >
+                    Gemini 공식 가격표 확인
+                  </a>
+                  {modelsFetchedAt && (
+                    <span className="ml-2">
+                      {modelsStale ? '마지막 저장 목록 사용 중' : `${new Date(modelsFetchedAt).toLocaleString()} 갱신`}
+                    </span>
+                  )}
+                </div>
+                <Button variant="secondary" disabled={saving || !selectedModel} onClick={saveModel}>
+                  {saving ? '저장 중...' : saved ? '저장됨!' : '모델 적용'}
+                </Button>
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-ink-soft">
+                비용 표시는 모델 계열에 따른 상대적인 안내입니다. 실제 무료 한도와 과금 여부는 Google AI
+                Studio의 프로젝트 결제 설정에 따라 달라질 수 있습니다.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+      {error && <p className="mt-2 text-xs font-bold text-danger">{error}</p>}
+    </Card>
+  );
+}
+
 export function SettingsPage() {
   return (
     <div className="mx-auto max-w-2xl px-6 py-12">
@@ -303,6 +540,9 @@ export function SettingsPage() {
         <StudentAccessSection />
       </div>
       <div className="animate-fade-in-up" style={{ animationDelay: '80ms' }}>
+        <AiSettingsSection />
+      </div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '120ms' }}>
         <BackupSection />
       </div>
     </div>

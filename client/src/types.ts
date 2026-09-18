@@ -85,6 +85,9 @@ export interface ExamSession {
   id: number;
   exam_id: number;
   roll_number: number;
+  // 학생 화면이 자기 세션을 가리킬 때 쓰는 무작위 토큰(참여 시 한 번 발급). id는 교사
+  // 화면(로그인 필요)에서만 쓰고, 학생 쪽 요청에는 이걸 대신 써야 한다.
+  access_token: string;
   status: SessionStatus;
   started_at: string | null;
   submitted_at: string | null;
@@ -172,10 +175,14 @@ export interface QuestionStudentAnswer {
   selected_choice_id: number | null;
   selected_choice_text: string | null;
   short_answer_text: string | null;
+  // 반 정답률 80%+ 인 문항을 평균 이하 시간에 풀고도 틀린 경우 true - 교사가 부주의한
+  // 실수인지 짚어볼 만해서 표시한다.
+  isOutlier: boolean;
 }
 
 export interface QuestionBreakdown {
   avgTimeMs: number | null;
+  accuracy: number | null;
   students: QuestionStudentAnswer[];
 }
 
@@ -241,6 +248,9 @@ export interface MonitorHistoryItem {
   order_index: number;
   type: QuestionType;
   prompt: string;
+  prompt_image_path: string | null;
+  choices: { id: number; order_index: number; text: string; is_correct: boolean }[];
+  correct_short_answers: string[] | null;
   selected_choice_id: number | null;
   selected_choice_text: string | null;
   short_answer_text: string | null;

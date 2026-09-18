@@ -45,6 +45,12 @@ if (!sessionColumns.includes('allow_rejoin')) {
 if (!sessionColumns.includes('disqualify_reason')) {
   db.exec('ALTER TABLE exam_sessions ADD COLUMN disqualify_reason TEXT');
 }
+if (!sessionColumns.includes('access_token')) {
+  db.exec('ALTER TABLE exam_sessions ADD COLUMN access_token TEXT');
+}
+db.exec(
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_access_token ON exam_sessions(access_token) WHERE access_token IS NOT NULL',
+);
 
 const questionColumns = db.prepare('PRAGMA table_info(questions)').all().map((c) => c.name);
 if (!questionColumns.includes('prompt_image_path')) {

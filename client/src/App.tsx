@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Dashboard } from './pages/teacher/Dashboard'
 import { ExamBuilder } from './pages/teacher/exam-builder/ExamBuilder'
 import { ExamResults } from './pages/teacher/ExamResults'
+import { SessionReview } from './pages/teacher/SessionReview'
 import { ExamReportPicker } from './pages/teacher/ExamReportPicker'
 import { ExamMonitorPicker } from './pages/teacher/ExamMonitorPicker'
 import { ExamMonitor } from './pages/teacher/ExamMonitor'
@@ -19,6 +20,7 @@ function App() {
         <Route path="/" element={<TeacherLayout><Dashboard /></TeacherLayout>} />
         <Route path="/exams/:id" element={<TeacherLayout><ExamBuilder /></TeacherLayout>} />
         <Route path="/exams/:id/results" element={<TeacherLayout><ExamResults /></TeacherLayout>} />
+        <Route path="/exams/:id/sessions/:sessionId" element={<TeacherLayout><SessionReview /></TeacherLayout>} />
         <Route path="/roster" element={<TeacherLayout><RosterPage /></TeacherLayout>} />
         <Route path="/exam-monitor" element={<TeacherLayout><ExamMonitorPicker /></TeacherLayout>} />
         <Route path="/exam-monitor/:id" element={<TeacherLayout><ExamMonitor /></TeacherLayout>} />

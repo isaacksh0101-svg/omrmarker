@@ -1,5 +1,5 @@
-import { config } from '../config.js';
 import { filterStandards } from './curriculumStandards.js';
+import { getGeminiApiKey, getGeminiModel } from './appSettings.js';
 
 // AI(현재는 Gemini) 호출은 이 파일에서만 일어난다. 이 앱에서 유일하게 외부 네트워크를
 // 사용하는 지점이며, provider를 바꾸고 싶으면 이 파일의 callGemini()만 교체하면 된다.
@@ -108,11 +108,13 @@ ${standardsList}
 }
 
 async function callGemini({ imageBase64, mimeType, promptText, responseSchema }) {
-  if (!config.gemini.apiKey) {
-    throw new Error('GEMINI_API_KEY가 설정되지 않았습니다. server/.env를 확인하세요.');
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
+    throw new Error('AI API 키가 설정되지 않았습니다. 환경설정 화면에서 입력해주세요.');
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.gemini.model}:generateContent?key=${config.gemini.apiKey}`;
+  const model = getGeminiModel();
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   const body = {
     contents: [
       {

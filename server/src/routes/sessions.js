@@ -2,6 +2,7 @@ import { Router } from 'express';
 import * as repo from '../db/repo.js';
 import { config } from '../config.js';
 import { emitExamMonitorUpdate } from '../lib/realtime.js';
+import { requireAuth } from '../middleware/auth.js';
 
 export const sessionsRouter = Router();
 
@@ -94,6 +95,7 @@ sessionsRouter.post('/:id/sessions', async (req, res) => {
   res.status(201).json(session);
 });
 
+// 교사용 라우트(감독/결과 등, 전부 requireAuth)에서 쓴다 - 순차 정수 id로 조회한다.
 async function getSessionOr404(examId, sessionId, res) {
   const session = await repo.getSession(sessionId);
   if (!session || session.exam_id !== examId) {
@@ -103,22 +105,33 @@ async function getSessionOr404(examId, sessionId, res) {
   return session;
 }
 
+// 학생용 라우트(로그인 없음)는 전부 이걸로 조회한다 - URL의 :sessionId는 더 이상 DB의
+// 순차 정수 id가 아니라, 참여할 때 한 번 발급된 무작위 토큰이다. 남의 토큰을 추측하기
+// 어려우므로, 다른 학생의 세션 번호를 아무 정수나 넣어보는 식으로는 더 이상 접근할 수 없다.
+async function getSessionByTokenOr404(examId, token, res) {
+  const session = await repo.getSessionByToken(token);
+  if (!session || session.exam_id !== examId) {
+    res.status(404).json({ error: '응시 세션을 찾을 수 없습니다.' });
+    return undefined;
+  }
+  return session;
+}
+
 sessionsRouter.get('/:id/sessions/:sessionId', async (req, res) => {
   const examId = Number(req.params.id);
-  const sessionId = Number(req.params.sessionId);
-  const session = await getSessionOr404(examId, sessionId, res);
+  const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
   if (!session) return;
 
   const payload = { ...session };
   if (session.status === 'submitted' || session.status === 'force_submitted') {
-    payload.answers = await repo.getSessionAnswerSummary(sessionId);
+    payload.answers = await repo.getSessionAnswerSummary(session.id);
   }
   res.json(payload);
 });
 
 // 교사가 '시험 감독' 화면에서 누른다. 대기 중(joined)인 학생 전원을 한 번에 응시로
 // 전환하고, 이후 들어오는 학생도 곧장 응시로 들어가도록 exam.started_at을 남긴다.
-sessionsRouter.post('/:id/start', async (req, res) => {
+sessionsRouter.post('/:id/start', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const exam = await repo.getExam(examId);
   if (!exam || exam.status !== 'finalized') {
@@ -133,7 +146,7 @@ sessionsRouter.post('/:id/start', async (req, res) => {
 
 // 교사가 '시험 감독' 화면에서 누른다. 아직 대기/응시 중인 학생 전원을 지금까지 낸 답만으로
 // 한 번에 강제 제출 처리해 시험을 완전히 끝낸다.
-sessionsRouter.post('/:id/end-all', async (req, res) => {
+sessionsRouter.post('/:id/end-all', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const exam = await repo.getExam(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
@@ -147,7 +160,7 @@ sessionsRouter.post('/:id/end-all', async (req, res) => {
 // 교사가 '시험 감독' 화면에서 누른다. 시험 참여/응시 "접근"만 다시 열어준다(exams.ends_at
 // 제거) - 강제 종료됐던 학생 개개인을 응시 중으로 되돌리는 것과는 별개다(그건 학생 카드의
 // "되살리기"로 한다). 이후 새로 참여하는 학생부터 다시 받을 수 있게 된다.
-sessionsRouter.post('/:id/reopen', async (req, res) => {
+sessionsRouter.post('/:id/reopen', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const exam = await repo.getExam(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
@@ -179,9 +192,9 @@ async function finishForwardPassOrReview(examId, sessionId) {
 
 sessionsRouter.get('/:id/sessions/:sessionId/current-question', async (req, res) => {
   const examId = Number(req.params.id);
-  const sessionId = Number(req.params.sessionId);
-  const session = await getSessionOr404(examId, sessionId, res);
+  const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
   if (!session) return;
+  const sessionId = session.id;
   const exam = await repo.getExamFull(examId);
 
   if (session.status === 'submitted' || session.status === 'force_submitted') {
@@ -218,9 +231,9 @@ sessionsRouter.get('/:id/sessions/:sessionId/current-question', async (req, res)
 // 건너뛴(응답 안 하고 지나간) 문항들 - 1차 진행을 다 돌고 나서 다시 보여줄 목록.
 sessionsRouter.get('/:id/sessions/:sessionId/pending-questions', async (req, res) => {
   const examId = Number(req.params.id);
-  const sessionId = Number(req.params.sessionId);
-  const session = await getSessionOr404(examId, sessionId, res);
+  const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
   if (!session) return;
+  const sessionId = session.id;
   const exam = await repo.getExamFull(examId);
 
   const pendingIds = await repo.getPendingQuestionIds(sessionId);
@@ -234,9 +247,9 @@ sessionsRouter.get('/:id/sessions/:sessionId/pending-questions', async (req, res
 
 sessionsRouter.post('/:id/sessions/:sessionId/answers', async (req, res) => {
   const examId = Number(req.params.id);
-  const sessionId = Number(req.params.sessionId);
-  const session = await getSessionOr404(examId, sessionId, res);
+  const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
   if (!session) return;
+  const sessionId = session.id;
   const exam = await repo.getExamFull(examId);
 
   if (session.status !== 'in_progress') {
@@ -339,9 +352,9 @@ sessionsRouter.post('/:id/sessions/:sessionId/answers', async (req, res) => {
 // 다시 보여준 문항은 답하거나 포기하거나 둘 중 하나만 가능).
 sessionsRouter.post('/:id/sessions/:sessionId/skip', async (req, res) => {
   const examId = Number(req.params.id);
-  const sessionId = Number(req.params.sessionId);
-  const session = await getSessionOr404(examId, sessionId, res);
+  const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
   if (!session) return;
+  const sessionId = session.id;
   const exam = await repo.getExamFull(examId);
 
   if (session.status !== 'in_progress') {
@@ -371,9 +384,9 @@ sessionsRouter.post('/:id/sessions/:sessionId/skip', async (req, res) => {
 // 복습 화면에서 건너뛴 문항을 "포기"로 마감 - 빈 답(오답 처리)으로 채점하고 목록에서 뺀다.
 sessionsRouter.post('/:id/sessions/:sessionId/give-up', async (req, res) => {
   const examId = Number(req.params.id);
-  const sessionId = Number(req.params.sessionId);
-  const session = await getSessionOr404(examId, sessionId, res);
+  const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
   if (!session) return;
+  const sessionId = session.id;
 
   if (session.status !== 'in_progress') {
     return res.status(400).json({ error: '응시 중인 세션이 아닙니다.' });
@@ -401,8 +414,7 @@ sessionsRouter.post('/:id/sessions/:sessionId/give-up', async (req, res) => {
 // "되살리기"로 이어서 풀게 해줄 수 있다.
 sessionsRouter.post('/:id/sessions/:sessionId/warning', async (req, res) => {
   const examId = Number(req.params.id);
-  const sessionId = Number(req.params.sessionId);
-  const session = await getSessionOr404(examId, sessionId, res);
+  const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
   if (!session) return;
 
   if (session.status !== 'in_progress') {
@@ -410,25 +422,24 @@ sessionsRouter.post('/:id/sessions/:sessionId/warning', async (req, res) => {
   }
 
   const type = req.body.type === 'window_blur' ? 'window_blur' : 'visibility_hidden';
-  const result = await repo.recordScreenLeave(sessionId, type, config.anticheatDebounceMs);
+  const result = await repo.recordScreenLeave(session.id, type, config.anticheatDebounceMs);
   emitExamMonitorUpdate(examId);
   res.json(result);
 });
 
 sessionsRouter.post('/:id/sessions/:sessionId/submit', async (req, res) => {
   const examId = Number(req.params.id);
-  const sessionId = Number(req.params.sessionId);
-  const session = await getSessionOr404(examId, sessionId, res);
+  const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
   if (!session) return;
 
-  await repo.finalizeSession(sessionId);
+  await repo.finalizeSession(session.id);
   emitExamMonitorUpdate(examId);
-  res.json(await repo.getSession(sessionId));
+  res.json(await repo.getSession(session.id));
 });
 
 // ---- 교사용: 시험 감독(실시간 모니터링) ----
 
-sessionsRouter.get('/:id/monitor', async (req, res) => {
+sessionsRouter.get('/:id/monitor', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const exam = await repo.getExamFull(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
@@ -448,7 +459,7 @@ sessionsRouter.get('/:id/monitor', async (req, res) => {
   });
 });
 
-sessionsRouter.get('/:id/sessions/:sessionId/monitor', async (req, res) => {
+sessionsRouter.get('/:id/sessions/:sessionId/monitor', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const sessionId = Number(req.params.sessionId);
   const session = await getSessionOr404(examId, sessionId, res);
@@ -456,7 +467,27 @@ sessionsRouter.get('/:id/sessions/:sessionId/monitor', async (req, res) => {
 
   const exam = await repo.getExamFull(examId);
   const student = await repo.getRosterEntry(session.roll_number);
-  const history = await repo.getSessionAnswerHistory(sessionId);
+  const rawHistory = await repo.getSessionAnswerHistory(sessionId);
+
+  // getSessionAnswerHistory는 문항당 학생이 실제로 고른 보기 텍스트만 갖고 있다 - 지난
+  // 시험을 나중에 복습할 때(SessionReview 페이지)는 문항 이미지와 보기 전체·정답까지
+  // 같이 봐야 하므로, 이미 불러온 exam.questions에서 같은 문항을 찾아 덧붙인다.
+  const history = rawHistory.map((h) => {
+    const question = exam.questions.find((q) => q.order_index === h.order_index);
+    return {
+      ...h,
+      prompt_image_path: question?.prompt_image_path ?? null,
+      choices: question
+        ? question.choices.map((c) => ({
+            id: c.id,
+            order_index: c.order_index,
+            text: c.text,
+            is_correct: c.is_correct,
+          }))
+        : [],
+      correct_short_answers: question?.correct_short_answers ?? null,
+    };
+  });
 
   let currentQuestion = null;
   if (session.status === 'in_progress') {
@@ -478,8 +509,12 @@ sessionsRouter.get('/:id/sessions/:sessionId/monitor', async (req, res) => {
     }
   }
 
+  // access_token은 학생 화면이 자기 세션을 증명하는 비밀값이다 - 교사는 이미 이 세션의
+  // 모든 내용을 볼 권한이 있어 문제될 건 없지만, 굳이 API 응답에 실어 보낼 이유도 없어 뺀다.
+  const { access_token, ...sessionWithoutToken } = session;
+
   res.json({
-    session,
+    session: sessionWithoutToken,
     student: student ? { roll_number: student.roll_number, name: student.name } : null,
     currentQuestion,
     history,
@@ -488,7 +523,7 @@ sessionsRouter.get('/:id/sessions/:sessionId/monitor', async (req, res) => {
 
 // 교사가 응시 중(또는 아직 시작 전)인 학생의 시험을 강제로 끝낸다. 이미 끝난 세션은
 // 다시 종료할 수 없으므로 상태를 먼저 확인한다.
-sessionsRouter.post('/:id/sessions/:sessionId/force-submit', async (req, res) => {
+sessionsRouter.post('/:id/sessions/:sessionId/force-submit', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const sessionId = Number(req.params.sessionId);
   const session = await getSessionOr404(examId, sessionId, res);
@@ -508,7 +543,7 @@ sessionsRouter.post('/:id/sessions/:sessionId/force-submit', async (req, res) =>
 // 시간이 이미 다 지나있으면 되살려도 바로 다시 시간 초과로 제출돼버리므로, 지금 시각을
 // 새 시작 시각으로 삼아 처음 시험 시간만큼 다시 준다(기존에 받은 추가시간은 그대로 유지).
 // 경고 횟수도 0으로 초기화한다 - 안 그러면 이미 최대치라 조그만 이탈 한 번에 바로 재종료된다.
-sessionsRouter.post('/:id/sessions/:sessionId/revive', async (req, res) => {
+sessionsRouter.post('/:id/sessions/:sessionId/revive', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const sessionId = Number(req.params.sessionId);
   const session = await getSessionOr404(examId, sessionId, res);
@@ -525,7 +560,7 @@ sessionsRouter.post('/:id/sessions/:sessionId/revive', async (req, res) => {
 
 // 교사가 시험 감독 화면에서 특정 학생에게만 시간을 더 준다(+1/+5/+10분 등). 이미 끝난
 // 세션은 더 줘도 의미가 없으므로 응시 중일 때만 허용한다.
-sessionsRouter.post('/:id/sessions/:sessionId/extend-time', async (req, res) => {
+sessionsRouter.post('/:id/sessions/:sessionId/extend-time', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const sessionId = Number(req.params.sessionId);
   const session = await getSessionOr404(examId, sessionId, res);
@@ -547,7 +582,7 @@ sessionsRouter.post('/:id/sessions/:sessionId/extend-time', async (req, res) => 
 // 같은 번호로 다른 기기가 참여를 시도했다가 막힌 경우(위 join 라우트 참고), 교사가
 // "실시간 감독"에서 이 버튼을 눌러 다음 참여 시도 한 번만 통과시켜준다 - 학생 기기가
 // 고장나서 다른 기기로 이어가야 하는 등 정당한 상황을 위한 예외 통로.
-sessionsRouter.post('/:id/sessions/:sessionId/allow-rejoin', async (req, res) => {
+sessionsRouter.post('/:id/sessions/:sessionId/allow-rejoin', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const sessionId = Number(req.params.sessionId);
   const session = await getSessionOr404(examId, sessionId, res);
@@ -560,7 +595,7 @@ sessionsRouter.post('/:id/sessions/:sessionId/allow-rejoin', async (req, res) =>
 
 // ---- 교사용 결과 집계 ----
 
-sessionsRouter.get('/:id/results', async (req, res) => {
+sessionsRouter.get('/:id/results', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const exam = await repo.getExamFull(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
@@ -584,7 +619,7 @@ sessionsRouter.get('/:id/results', async (req, res) => {
 });
 
 // 문항별 정답률에서 문항 번호를 누르면 보여주는 학생별 소요시간/정답 여부 상세.
-sessionsRouter.get('/:id/questions/:qid/breakdown', async (req, res) => {
+sessionsRouter.get('/:id/questions/:qid/breakdown', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const qid = Number(req.params.qid);
   const question = await repo.getQuestion(examId, qid);
@@ -594,7 +629,32 @@ sessionsRouter.get('/:id/questions/:qid/breakdown', async (req, res) => {
   const times = rows.map((r) => r.time_spent_ms).filter((t) => t != null);
   const avgTimeMs = times.length > 0 ? times.reduce((a, b) => a + b, 0) / times.length : null;
 
-  res.json({ avgTimeMs, students: rows });
+  const answeredCount = rows.length;
+  const correctCount = rows.filter((r) => r.is_correct).length;
+  const accuracy = answeredCount > 0 ? correctCount / answeredCount : null;
+
+  // "쉬운 문항"을 고정값(예: 80%)으로 정하지 않는다 - 시험마다 난이도가 다르고, 반
+  // 인원이 적으면 한 명 차이로 값이 크게 흔들려서 절대 기준은 데이터로서 가치가 떨어진다.
+  // 대신 "그 학생 자신의 이번 시험 전체 정답률"을 기준점으로 삼는다: 이 문항의 반
+  // 정답률이 그 학생의 전체 정답률보다 높다면(=그 학생 실력 기준으로도 상대적으로 쉬운
+  // 축에 속하는 문항인데) 틀렸다는 뜻이라, 학생마다 다른 기준으로 "그 학생에게 의미
+  // 있는" 이상치를 잡을 수 있다. 전체 정답률은 시험이 끝난(submitted/force_submitted)
+  // 학생만 의미가 있어 그 외엔 비교하지 않는다.
+  const { sessions } = await repo.getResultsForExam(examId);
+  const ownAccuracyByRoll = new Map(
+    sessions
+      .filter((s) => s.status === 'submitted' || s.status === 'force_submitted')
+      .map((s) => [s.roll_number, s.max_score ? s.score / s.max_score : 0]),
+  );
+
+  const students = rows.map((r) => {
+    const ownAccuracy = ownAccuracyByRoll.get(r.roll_number);
+    const isOutlier =
+      answeredCount >= 4 && accuracy != null && ownAccuracy != null && !r.is_correct && accuracy > ownAccuracy;
+    return { ...r, isOutlier };
+  });
+
+  res.json({ avgTimeMs, accuracy, students });
 });
 
 // 정답률/총 소요시간이 학급 평균에서 크게 벗어난 학생을 표시한다.

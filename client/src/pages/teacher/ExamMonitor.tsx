@@ -294,7 +294,9 @@ export function ExamMonitor() {
   async function startExam(waitingCount: number, alreadyStarted: boolean) {
     const message = alreadyStarted
       ? `아직 대기 중인 학생 ${waitingCount}명을 지금 시작할까요?`
-      : `지금 시험을 시작할까요? 입장한 학생 ${waitingCount}명의 화면에 바로 첫 문항이 표시됩니다.`;
+      : waitingCount > 0
+        ? `지금 시험을 시작할까요? 입장한 학생 ${waitingCount}명의 화면에 바로 첫 문항이 표시됩니다.`
+        : '지금 시험을 시작할까요? 이후 입장하는 학생은 대기 화면 없이 바로 첫 문항부터 응시합니다.';
     if (!confirm(message)) return;
     try {
       await api.post(`/exams/${examId}/start`);
@@ -305,13 +307,11 @@ export function ExamMonitor() {
   }
 
   async function endExam(activeCount: number) {
-    if (
-      !confirm(
-        `시험을 전체 종료할까요? 아직 대기·응시 중인 학생 ${activeCount}명이 지금까지 낸 답까지만 인정되어 즉시 제출 처리됩니다.\n종료 후에도 "전체 되살리기"로 다시 응시 중 상태로 되돌릴 수 있습니다.`,
-      )
-    ) {
-      return;
-    }
+    const message =
+      activeCount > 0
+        ? `시험을 전체 종료할까요? 아직 대기·응시 중인 학생 ${activeCount}명이 지금까지 낸 답까지만 인정되어 즉시 제출 처리됩니다.\n종료된 학생은 카드의 "되살리기"로 한 명씩 다시 응시 중 상태로 되돌릴 수 있습니다.`
+        : '시험을 종료할까요? 종료 이후 새로 참여를 시도하는 학생은 들어올 수 없습니다.\n"시험 다시 열기"로 언제든 다시 참여를 받을 수 있습니다.';
+    if (!confirm(message)) return;
     try {
       await api.post(`/exams/${examId}/end-all`);
       load();
@@ -393,24 +393,22 @@ export function ExamMonitor() {
         )}
 
         <div className="ml-auto flex items-center gap-2">
-          {waitingCount > 0 ? (
-            <Button onClick={() => startExam(waitingCount, examStarted)}>
-              {examStarted ? `대기 중인 학생 시작 (${waitingCount}명)` : '시험 시작'}
-            </Button>
-          ) : examStarted && !examEnded ? (
-            <Badge tone="good">모든 학생 시작함</Badge>
-          ) : !examEnded ? (
-            <Badge tone="neutral">입장한 학생이 없습니다</Badge>
-          ) : null}
           {!examEnded && (
-            <Button
-              variant="danger"
-              disabled={activeCount === 0}
-              title={activeCount === 0 ? '대기·응시 중인 학생이 없습니다.' : undefined}
-              onClick={() => endExam(activeCount)}
-            >
-              시험 전체 종료
-            </Button>
+            <>
+              {!examStarted ? (
+                <Button onClick={() => startExam(waitingCount, false)}>시험 시작</Button>
+              ) : waitingCount > 0 ? (
+                <Button onClick={() => startExam(waitingCount, true)}>대기 중인 학생 시작 ({waitingCount}명)</Button>
+              ) : (
+                <Badge tone="good">모든 학생 시작함</Badge>
+              )}
+              {/* 지금 대기·응시 중인 학생이 없어도(예: 아무도 안 들어왔거나 다들 이미
+                  제출함) 종료 버튼은 항상 눌려야 한다 - 이 버튼의 핵심 역할은 "이후 새로
+                  들어오는 학생을 막는 문 닫기"라, 지금 활성 학생 수와는 무관하다. */}
+              <Button variant="danger" onClick={() => endExam(activeCount)}>
+                시험 전체 종료
+              </Button>
+            </>
           )}
           {examEnded && (
             <Button variant="secondary" onClick={reopenExam}>

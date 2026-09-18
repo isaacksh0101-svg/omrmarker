@@ -6,7 +6,6 @@ import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
 import { AccuracyRow } from '../../components/AccuracyRow';
 import { StatCard, StatCardRow } from '../../components/StatCard';
-import { SessionDetailModal } from '../../components/SessionDetailModal';
 import { downloadWorkbook } from '../../lib/exportXlsx';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -39,7 +38,6 @@ export function ExamResults() {
   const [expandedQuestionId, setExpandedQuestionId] = useState<number | null>(null);
   const [breakdowns, setBreakdowns] = useState<Record<number, QuestionBreakdown>>({});
   const [loadingBreakdownId, setLoadingBreakdownId] = useState<number | null>(null);
-  const [viewingSessionId, setViewingSessionId] = useState<number | null>(null);
 
   useEffect(() => {
     api.get<Exam>(`/exams/${id}`).then(setExam);
@@ -230,6 +228,7 @@ export function ExamResults() {
                             >
                               {formatMs(s.time_spent_ms)}
                             </span>
+                            {s.isOutlier && <Badge tone="warn">확인 필요</Badge>}
                           </div>
                         ))}
                       </div>
@@ -284,7 +283,7 @@ export function ExamResults() {
                 className={`border-b border-line last:border-0 ${
                   s.session_id != null ? 'cursor-pointer hover:bg-bg' : ''
                 }`}
-                onClick={() => s.session_id != null && setViewingSessionId(s.session_id)}
+                onClick={() => s.session_id != null && navigate(`/exams/${id}/sessions/${s.session_id}`)}
               >
                 <td className="whitespace-nowrap px-3 py-2.5 font-bold text-ink">{s.roll_number}</td>
                 <td className="max-w-[7rem] truncate px-3 py-2.5 text-ink-soft">{s.name || '-'}</td>
@@ -310,16 +309,6 @@ export function ExamResults() {
           </tbody>
         </table>
       </Card>
-
-      {viewingSessionId != null && (
-        <SessionDetailModal
-          examId={Number(id)}
-          sessionId={viewingSessionId}
-          questionCount={data.questionStats.length}
-          examTitle={exam.title}
-          onClose={() => setViewingSessionId(null)}
-        />
-      )}
     </div>
   );
 }

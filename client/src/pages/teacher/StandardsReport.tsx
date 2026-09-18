@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/client';
 import type { RosterEntry, StandardAccuracy, StudentExamSummary } from '../../types';
 import { Card } from '../../components/Card';
@@ -8,7 +9,6 @@ import { CompareBar } from '../../components/CompareBar';
 import { TimeUnitBars } from '../../components/TimeUnitBars';
 import { StatCard, StatCardRow } from '../../components/StatCard';
 import { PageHeader } from '../../components/PageHeader';
-import { SessionDetailModal } from '../../components/SessionDetailModal';
 import { IconChart } from '../../components/icons';
 import { displaySubjectName } from '../../lib/subjectName';
 import { downloadWorkbook } from '../../lib/exportXlsx';
@@ -41,6 +41,7 @@ interface CompareItem {
 }
 
 export function StandardsReport() {
+  const navigate = useNavigate();
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [rollNumber, setRollNumber] = useState<string>('');
   const [from, setFrom] = useState('');
@@ -50,7 +51,6 @@ export function StandardsReport() {
   const [sortLowFirst, setSortLowFirst] = useState(false);
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
   const [studentExams, setStudentExams] = useState<StudentExamSummary[]>([]);
-  const [viewingExam, setViewingExam] = useState<StudentExamSummary | null>(null);
 
   useEffect(() => {
     api.get<RosterEntry[]>('/roster').then(setRoster);
@@ -276,7 +276,7 @@ export function StandardsReport() {
                 key={se.session_id}
                 type="button"
                 className="flex items-center justify-between gap-3 py-2.5 text-left transition-colors duration-150 hover:text-accent"
-                onClick={() => setViewingExam(se)}
+                onClick={() => navigate(`/exams/${se.exam_id}/sessions/${se.session_id}`)}
               >
                 <div className="min-w-0">
                   <p className="truncate text-sm font-bold text-ink">{se.title}</p>
@@ -366,16 +366,6 @@ export function StandardsReport() {
             </div>
           </Card>
         ))
-      )}
-
-      {viewingExam && (
-        <SessionDetailModal
-          examId={viewingExam.exam_id}
-          sessionId={viewingExam.session_id}
-          questionCount={viewingExam.question_count}
-          examTitle={viewingExam.title}
-          onClose={() => setViewingExam(null)}
-        />
       )}
     </div>
   );

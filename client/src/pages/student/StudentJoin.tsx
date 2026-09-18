@@ -18,7 +18,7 @@ export function StudentJoin() {
 
   useEffect(() => {
     if (confirmed) {
-      api.get<Exam[]>('/exams').then((list) => setExams(list.filter((e) => e.status === 'finalized')));
+      api.get<Exam[]>('/exams/for-student').then(setExams);
     }
   }, [confirmed]);
 
@@ -29,7 +29,7 @@ export function StudentJoin() {
       const session = await api.post<ExamSession>(`/exams/${examId}/sessions`, {
         roll_number: Number(rollNumber),
       });
-      localStorage.setItem(`omr_session_${examId}`, String(session.id));
+      localStorage.setItem(`omr_session_${examId}`, session.access_token);
       navigate(`/student/exam/${examId}`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : '참여 중 오류가 발생했습니다.');
@@ -41,9 +41,12 @@ export function StudentJoin() {
   if (!confirmed) {
     return (
       <div className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-8">
-        <h1 className="text-xl font-bold text-ink">시험 응시</h1>
+        <div className="flex h-16 w-52 items-center overflow-hidden">
+          <img src="/scorelab-logo.png" alt="ScoreLab" className="h-auto w-full" />
+        </div>
+        <h1 className="mt-3 text-2xl font-bold tracking-tight text-ink">시험 응시</h1>
         <p className="mt-1 text-sm text-ink-soft">출석번호를 입력해주세요.</p>
-        <Card className="mt-6">
+        <Card className="mt-6 border-white/80 shadow-[0_20px_55px_rgba(20,75,160,0.12)]">
           <label className="flex flex-col gap-1">
             <span className="text-xs font-bold text-ink-soft">출석번호</span>
             <input
@@ -74,6 +77,9 @@ export function StudentJoin() {
 
   return (
     <div className="mx-auto max-w-md px-8 py-10">
+      <div className="mb-6 flex h-12 w-40 items-center overflow-hidden">
+        <img src="/scorelab-logo.png" alt="ScoreLab" className="h-auto w-full" />
+      </div>
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-ink">{rollNumber}번 학생</h1>
         <button className="text-xs font-bold text-ink-soft" onClick={() => setConfirmed(false)}>

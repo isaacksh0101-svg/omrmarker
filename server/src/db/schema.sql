@@ -76,6 +76,10 @@ CREATE TABLE IF NOT EXISTS exam_sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   exam_id INTEGER NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
   roll_number INTEGER NOT NULL,
+  -- 학생용 화면(로그인 없음)이 자기 세션을 가리킬 때는 이 id(순차 정수라 추측하기 쉬움)
+  -- 대신 이 무작위 토큰을 쓴다 - 참여할 때 한 번만 발급해서 그 학생 응답에만 실어 보낸다.
+  -- 교사용 화면(로그인 필요)은 그대로 id를 쓴다.
+  access_token TEXT,
   status TEXT NOT NULL DEFAULT 'joined'
          CHECK(status IN ('joined','in_progress','submitted','force_submitted','disqualified')),
   socket_id TEXT,
@@ -98,6 +102,10 @@ CREATE TABLE IF NOT EXISTS exam_sessions (
   UNIQUE(exam_id, roll_number)
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_exam ON exam_sessions(exam_id);
+-- access_token 유니크 인덱스는 여기 두지 않는다: 이미 만들어진(access_token 컬럼이 없는)
+-- 기존 DB에서는 이 CREATE TABLE이 IF NOT EXISTS라 그냥 통과되고, 컬럼이 없는 채로 바로 이
+-- 인덱스 생성문이 실행되면 "no such column" 에러로 서버가 아예 못 뜬다. db/index.js가
+-- ALTER TABLE로 컬럼을 채워 넣은 "다음"에 인덱스를 만들도록 순서를 맞춰 거기서만 만든다.
 
 CREATE TABLE IF NOT EXISTS answers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

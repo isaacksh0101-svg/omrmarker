@@ -9,6 +9,12 @@ export class ApiError extends Error {
   }
 }
 
+// 로그인 세션이 없거나 만료돼 401을 받으면, 화면을 감싸고 있는 AuthGate가 로그인 화면으로
+// 돌아가도록 알려준다. 학생 화면(로그인 자체가 없음)의 요청은 애초에 401을 받을 일이 없다.
+function notifyUnauthorized() {
+  window.dispatchEvent(new Event('scorelab:unauthorized'));
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`/api${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -16,6 +22,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   });
   const isJson = res.headers.get('content-type')?.includes('application/json');
   const body = isJson ? await res.json().catch(() => null) : null;
+  if (res.status === 401) notifyUnauthorized();
   if (!res.ok) throw new ApiError(res.status, body);
   return body as T;
 }
@@ -33,6 +40,7 @@ export const api = {
     const res = await fetch(`/api${path}`, { method: 'POST', body: formData });
     const isJson = res.headers.get('content-type')?.includes('application/json');
     const body = isJson ? await res.json().catch(() => null) : null;
+    if (res.status === 401) notifyUnauthorized();
     if (!res.ok) throw new ApiError(res.status, body);
     return body as T;
   },
@@ -42,6 +50,7 @@ export const api = {
     if (!res.ok) {
       const isJson = res.headers.get('content-type')?.includes('application/json');
       const body = isJson ? await res.json().catch(() => null) : null;
+      if (res.status === 401) notifyUnauthorized();
       throw new ApiError(res.status, body);
     }
     const blob = await res.blob();

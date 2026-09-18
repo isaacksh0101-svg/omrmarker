@@ -17,6 +17,9 @@ import { sessionsRouter } from './routes/sessions.js';
 import { standardsRouter } from './routes/standards.js';
 import { rosterRouter } from './routes/roster.js';
 import { backupRouter } from './routes/backup.js';
+import { settingsRouter } from './routes/settings.js';
+import { authRouter } from './routes/auth.js';
+import { isLoopbackRequest, requireAuth } from './middleware/auth.js';
 
 const app = express();
 app.use(cors());
@@ -27,14 +30,23 @@ app.get('/api/health', (_req, res) => {
 });
 
 // AI로 문항을 불러올 때 원본 이미지에서 잘라낸 발문 이미지 - 학생/교사 화면이 이 경로로 요청한다.
+// 문항 이미지 자체는 시험 내용이라 로그인 없이도 학생 화면이 받아야 하므로 인증을 걸지 않는다.
 app.use('/uploads', express.static(config.uploadsDir));
 
+// 로그인 자체는 당연히 인증 없이 접근 가능해야 한다.
+app.use('/api/auth', authRouter);
+
+// 교사 전용 화면/기능 - 시험 만들기·AI 추출·학생 명단·백업·AI 설정은 전부 로그인 필요.
+// examsRouter/aiRouter/sessionsRouter가 전부 같은 '/api/exams' 경로를 나눠 쓰고 있어서,
+// 여기 app.use()에서 requireAuth를 붙이면 이 경로 전체(다른 라우터의 학생용 공개 라우트
+// 포함)에 걸려버린다 - 그래서 각 라우터 안, 라우트 하나하나에 requireAuth를 붙인다.
 app.use('/api/exams', examsRouter);
 app.use('/api/exams', aiRouter);
 app.use('/api/exams', sessionsRouter);
-app.use('/api/standards', standardsRouter);
-app.use('/api/roster', rosterRouter);
-app.use('/api/backup', backupRouter);
+app.use('/api/standards', requireAuth, standardsRouter);
+app.use('/api/roster', requireAuth, rosterRouter);
+app.use('/api/backup', requireAuth, backupRouter);
+app.use('/api/settings', requireAuth, settingsRouter);
 
 // 호스트/IPv4 형태만 허용(간단한 검증). 교사가 직접 입력한 값을 그대로 URL에 꽂으므로
 // 최소한의 형식 검사만 하고 실제로 연결되는지는 교사가 학생 기기로 직접 테스트해서 확인한다.
@@ -60,6 +72,23 @@ app.get('/api/lan-info', async (req, res) => {
   const servingClient = fs.existsSync(config.clientDistDir);
   const qr = await QRCode.toDataURL(studentUrl).catch(() => null);
   res.json({ url, studentUrl, qr, servingClient, candidates, selectedIp: ip });
+});
+
+// SPA의 교사 화면 URL도 LAN에서 직접 열리지 않게 막는다. 정적 JS/CSS는 학생 화면과
+// 공유하므로 그대로 제공하되, 교사 페이지와 모든 관리 API는 위의 localhost 검사로 보호한다.
+const teacherPagePrefixes = [
+  '/exams',
+  '/roster',
+  '/exam-monitor',
+  '/standards-report',
+  '/exam-reports',
+  '/settings',
+];
+app.use((req, res, next) => {
+  const isTeacherPage = req.path === '/'
+    || teacherPagePrefixes.some((prefix) => req.path === prefix || req.path.startsWith(`${prefix}/`));
+  if (!isTeacherPage || isLoopbackRequest(req)) return next();
+  res.status(403).type('text/plain').send('교사 관리 화면은 ScoreLab이 실행 중인 교사 PC에서만 사용할 수 있습니다.');
 });
 
 // 프로덕션 실행: 빌드된 클라이언트 정적 파일을 같은 포트에서 서빙한다.

@@ -114,8 +114,8 @@ export function Dashboard() {
             <button
               className={`rounded-2xl border px-3.5 py-2.5 text-left text-sm transition-all duration-200 ${
                 form.mode === 'online'
-                  ? 'border-accent bg-accent-soft text-accent-ink'
-                  : 'border-line bg-bg text-ink-soft hover:border-accent/40'
+                  ? 'border-blue-300 bg-[linear-gradient(135deg,#edf5ff_0%,#e7faff_100%)] text-accent-ink shadow-[0_6px_18px_rgba(7,93,245,0.08)]'
+                  : 'border-line bg-bg/70 text-ink-soft hover:border-blue-300 hover:bg-white'
               }`}
               onClick={() => setForm({ ...form, mode: 'online' })}
             >
@@ -125,8 +125,8 @@ export function Dashboard() {
             <button
               className={`rounded-2xl border px-3.5 py-2.5 text-left text-sm transition-all duration-200 ${
                 form.mode === 'paper_marking'
-                  ? 'border-accent bg-accent-soft text-accent-ink'
-                  : 'border-line bg-bg text-ink-soft hover:border-accent/40'
+                  ? 'border-blue-300 bg-[linear-gradient(135deg,#edf5ff_0%,#e7faff_100%)] text-accent-ink shadow-[0_6px_18px_rgba(7,93,245,0.08)]'
+                  : 'border-line bg-bg/70 text-ink-soft hover:border-blue-300 hover:bg-white'
               }`}
               onClick={() => setForm({ ...form, mode: 'paper_marking' })}
             >

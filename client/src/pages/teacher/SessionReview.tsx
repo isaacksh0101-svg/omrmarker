@@ -1,0 +1,230 @@
+import { useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { api } from '../../api/client';
+import type { Exam, ExamResultsData, SessionMonitorDetail } from '../../types';
+import type { StrokesPayload } from '../../lib/strokes';
+import { Card } from '../../components/Card';
+import { Badge } from '../../components/Badge';
+import { Button } from '../../components/Button';
+import { MathText } from '../../components/MathText';
+import { StrokesReplay } from '../../components/StrokesReplay';
+import { statusMeta } from '../../lib/sessionStatus';
+
+function formatMs(ms: number | null) {
+  if (ms == null) return '-';
+  return `${Math.round(ms / 1000)}초`;
+}
+
+// 점 몇 개는 실수로 스친 자국일 수 있어서, "실제로 풀어보려 한 시도"로 볼 만한 최소
+// 기준을 경험적으로 잡았다 - 정교한 통계라기보다 교사가 한 번 볼 만한지 걸러내는 정도.
+const MEANINGFUL_STROKE_POINTS = 30;
+
+function strokePointCount(strokes: StrokesPayload | null) {
+  if (!strokes) return 0;
+  return strokes.strokes.reduce((sum, s) => sum + s.points.length, 0);
+}
+
+// "결과보기"나 "학생별 리포트"에서 학생 한 명 × 시험 한 번을 클릭하면 들어오는 상세 화면.
+// 실시간 감독 중 쓰는 SessionDetailModal(좁은 팝업, 강제종료 등 액션 포함)과는 용도가
+// 달라서 분리했다 - 여긴 끝난 시험을 문항별로 찬찬히 복습하는 화면이라 페이지로 만들고,
+// 문제·보기·정답을 전부 그대로 보여준다.
+export function SessionReview() {
+  const { id, sessionId } = useParams();
+  const navigate = useNavigate();
+  const examId = Number(id);
+  const sid = Number(sessionId);
+
+  const [exam, setExam] = useState<Exam | null>(null);
+  const [detail, setDetail] = useState<SessionMonitorDetail | null>(null);
+  const [resultsData, setResultsData] = useState<ExamResultsData | null>(null);
+  const [openStrokesIndex, setOpenStrokesIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    api.get<Exam>(`/exams/${examId}`).then(setExam);
+  }, [examId]);
+
+  useEffect(() => {
+    setDetail(null);
+    setOpenStrokesIndex(null);
+    api.get<SessionMonitorDetail>(`/exams/${examId}/sessions/${sid}/monitor`).then(setDetail);
+  }, [examId, sid]);
+
+  // 이전/다음 학생 이동을 위해 이 시험의 전체 세션 목록(출석번호 순)을 한 번 불러온다.
+  useEffect(() => {
+    api.get<ExamResultsData>(`/exams/${examId}/results`).then(setResultsData);
+  }, [examId]);
+
+  const orderedSessions = (resultsData?.sessions ?? []).filter((s) => s.session_id != null);
+  const currentIndex = orderedSessions.findIndex((s) => s.session_id === sid);
+  const prevSession = currentIndex > 0 ? orderedSessions[currentIndex - 1] : null;
+  const nextSession =
+    currentIndex >= 0 && currentIndex < orderedSessions.length - 1 ? orderedSessions[currentIndex + 1] : null;
+
+  if (!detail) return <div className="p-10 text-sm text-ink-soft">불러오는 중...</div>;
+
+  const meta = statusMeta(detail.session.status, detail.session.disqualify_reason);
+
+  return (
+    <div className="mx-auto max-w-3xl px-6 py-12">
+      <button
+        className="text-xs font-bold text-ink-soft transition-colors duration-150 hover:text-accent"
+        onClick={() => navigate(-1)}
+      >
+        ← 뒤로
+      </button>
+
+      <div className="animate-fade-in-up mt-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-2xl font-bold tracking-tight text-ink">
+              {detail.student?.roll_number}번 {detail.student?.name || ''}
+            </h1>
+            <Badge tone={meta.tone}>{meta.label}</Badge>
+          </div>
+          {exam && <p className="mt-1 truncate text-sm text-ink-soft">{exam.title}</p>}
+        </div>
+        {orderedSessions.length > 1 && (
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!prevSession}
+              onClick={() => prevSession && navigate(`/exams/${examId}/sessions/${prevSession.session_id}`)}
+            >
+              ← 이전 학생
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!nextSession}
+              onClick={() => nextSession && navigate(`/exams/${examId}/sessions/${nextSession.session_id}`)}
+            >
+              다음 학생 →
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {(detail.session.status === 'submitted' || detail.session.status === 'force_submitted') && (
+        <Card className="animate-fade-in-up mt-5">
+          <p className="text-xs font-bold text-ink-soft">최종 점수</p>
+          <p className="mt-1 text-lg font-bold text-ink">
+            {detail.session.score ?? 0} / {detail.session.max_score ?? 0}
+          </p>
+        </Card>
+      )}
+
+      <div className="mt-5 flex flex-col gap-3">
+        {detail.history.length === 0 ? (
+          <Card>
+            <p className="text-sm text-ink-soft">아직 제출한 답이 없습니다.</p>
+          </Card>
+        ) : (
+          detail.history.map((h) => {
+            const strokesOpen = openStrokesIndex === h.order_index;
+            const points = strokePointCount(h.strokes);
+            // 필기 없이 맞혔다 - 찍었을 수도, 암산했을 수도 있어 판단은 못 하지만 사실
+            // 자체는 교사가 참고할 만하다.
+            const correctWithoutWork = h.is_correct === 1 && points === 0;
+            // 나름 열심히 시도한 흔적(필기)이 있는데도 틀렸다 - 부주의가 아니라 이해가
+            // 부족했을 가능성이 높은 경우라, "혼낼 게 아니라 도와줘야 할" 신호로 구분한다.
+            const triedHardButWrong = h.is_correct === 0 && points >= MEANINGFUL_STROKE_POINTS;
+            return (
+              <Card key={h.order_index} className="animate-fade-in-up">
+                <div className="flex items-start gap-3">
+                  <span
+                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                      h.is_correct ? 'bg-good/15 text-good' : 'bg-danger/15 text-danger'
+                    }`}
+                  >
+                    {h.order_index + 1}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    {h.prompt_image_path ? (
+                      <img
+                        src={`/uploads/${h.prompt_image_path}`}
+                        alt="문항 이미지"
+                        className="max-w-full rounded-lg border border-line"
+                      />
+                    ) : (
+                      h.prompt && (
+                        <p className="whitespace-pre-wrap text-sm font-bold text-ink">
+                          <MathText text={h.prompt} />
+                        </p>
+                      )
+                    )}
+
+                    {(correctWithoutWork || triedHardButWrong) && (
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {correctWithoutWork && <Badge tone="neutral">필기 없이 정답</Badge>}
+                        {triedHardButWrong && <Badge tone="warn">필기 흔적 있는데 오답</Badge>}
+                      </div>
+                    )}
+
+                    {h.choices.length > 0 && (
+                      <div className="mt-2 flex flex-col gap-1.5">
+                        {h.choices.map((c) => {
+                          const wasSelected = c.id === h.selected_choice_id;
+                          return (
+                            <div
+                              key={c.id}
+                              className={`flex items-center justify-between rounded-lg border px-2.5 py-1.5 text-xs ${
+                                c.is_correct
+                                  ? 'border-good/40 bg-good/10 text-good'
+                                  : wasSelected
+                                    ? 'border-danger/40 bg-danger/10 text-danger'
+                                    : 'border-line bg-bg text-ink-soft'
+                              }`}
+                            >
+                              <span>
+                                <MathText text={c.text} />
+                              </span>
+                              <span className="flex shrink-0 items-center gap-1.5 text-[10px] font-bold">
+                                {c.is_correct && <span>정답</span>}
+                                {wasSelected && <span>선택함</span>}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {h.choices.length === 0 && (
+                      <div className="mt-2 flex flex-col gap-1 text-xs">
+                        <p className={`font-bold ${h.is_correct ? 'text-good' : 'text-danger'}`}>
+                          학생 답: {h.short_answer_text || '(무응답)'}
+                        </p>
+                        {!h.is_correct && h.correct_short_answers && h.correct_short_answers.length > 0 && (
+                          <p className="text-ink-soft">정답: {h.correct_short_answers.join(', ')}</p>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="mt-2 flex items-center gap-3 text-[11px] text-ink-soft">
+                      <span>{formatMs(h.time_spent_ms)}</span>
+                      {h.strokes && (
+                        <button
+                          type="button"
+                          className="font-bold text-accent hover:underline"
+                          onClick={() => setOpenStrokesIndex(strokesOpen ? null : h.order_index)}
+                        >
+                          필기 {strokesOpen ? '닫기' : '보기'}
+                        </button>
+                      )}
+                    </div>
+                    {strokesOpen && h.strokes && (
+                      <StrokesReplay
+                        payload={h.strokes}
+                        className="animate-fade-in-up mt-2 w-full rounded-lg border border-line bg-bg"
+                      />
+                    )}
+                  </div>
+                </div>
+              </Card>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}

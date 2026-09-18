@@ -1,27 +1,68 @@
 @import "tailwindcss";
 
 @theme {
-  /* Material Design 3 톤 체계로 다듬은 단일 블루 강조색 팔레트 */
-  --color-bg: #f6f7fb;
+  /* ScoreLab 로고의 선명한 블루·시안과 맞춘 밝은 분석 대시보드 팔레트 */
+  --color-bg: #f4f8ff;
   --color-panel: #ffffff;
-  --color-surface-container: #eef0f7;
-  --color-ink: #1b1c22;
-  --color-ink-soft: #5c5f6d;
-  --color-line: #e1e3ec;
-  --color-outline: #eceef5;
-  --color-accent: #3258ce;
-  --color-accent-soft: #e2e8fb;
-  --color-accent-ink: #1c3a94;
+  --color-surface-container: #edf5ff;
+  --color-ink: #13213c;
+  --color-ink-soft: #66738d;
+  --color-line: #dbe8f7;
+  --color-outline: #eaf1fb;
+  --color-accent: #075df5;
+  --color-accent-soft: #e8f2ff;
+  --color-accent-ink: #084dbb;
+  --color-cyan: #08b9e8;
   --color-good: #12b76a;
   --color-warn: #f79009;
   --color-danger: #f04438;
 }
 
 body {
-  background: var(--color-bg);
+  min-width: 320px;
+  background:
+    radial-gradient(circle at 82% -10%, rgba(8, 185, 232, 0.10), transparent 30rem),
+    radial-gradient(circle at 35% 0%, rgba(7, 93, 245, 0.07), transparent 26rem),
+    var(--color-bg);
   color: var(--color-ink);
-  font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', 'Segoe UI', sans-serif;
+  font-family: 'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Malgun Gothic', 'Segoe UI', sans-serif;
   line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(8, 185, 232, 0.24);
+  color: var(--color-ink);
+}
+
+:where(input, select, textarea) {
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+:where(input, select, textarea):focus {
+  border-color: var(--color-accent) !important;
+  box-shadow: 0 0 0 3px rgba(7, 93, 245, 0.10);
+}
+
+:where(input, textarea)::placeholder {
+  color: #9aa7bc;
+}
+
+* {
+  scrollbar-color: #c6d9ee transparent;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #c6d9ee;
+  background-clip: padding-box;
 }
 
 /* Material Design 3의 "emphasized decelerate" 곡선을 기준으로 한 진입 애니메이션.

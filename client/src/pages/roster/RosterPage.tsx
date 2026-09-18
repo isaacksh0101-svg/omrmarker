@@ -98,6 +98,20 @@ export function RosterPage() {
     reload();
   }
 
+  async function removeLearningData(roll: number) {
+    if (
+      !confirm(
+        `${roll}번 학생의 모든 학습 데이터를 완전 삭제할까요?\n\n응시 기록, 답안, 점수, 문항별 소요시간, 필기와 화면 이탈 기록이 삭제되며 되돌릴 수 없습니다. 학생 명단은 유지됩니다.`,
+      )
+    ) return;
+    try {
+      await api.delete(`/roster/${roll}/learning-data`);
+      alert(`${roll}번 학생의 학습 데이터를 완전 삭제했습니다.`);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : '학습 데이터 삭제 중 오류가 발생했습니다.');
+    }
+  }
+
   function downloadTemplate() {
     downloadWorkbook('학생명단_양식.xlsx', [
       {
@@ -224,7 +238,7 @@ export function RosterPage() {
                 <tr className="border-b border-line text-left text-xs font-bold text-ink-soft">
                   <th className="px-4 py-2.5">출석번호</th>
                   <th className="px-4 py-2.5">이름</th>
-                  <th className="px-4 py-2.5"></th>
+                  <th className="px-4 py-2.5 text-right">관리</th>
                 </tr>
               </thead>
               <tbody>
@@ -235,6 +249,12 @@ export function RosterPage() {
                       <NameCell roll={r.roll_number} name={r.name} onSaved={reload} />
                     </td>
                     <td className="px-4 py-2.5 text-right">
+                      <button
+                        className="mr-3 text-xs font-bold text-danger hover:underline"
+                        onClick={() => removeLearningData(r.roll_number)}
+                      >
+                        학습 데이터 삭제
+                      </button>
                       <button
                         className="text-xs text-ink-soft hover:text-danger"
                         onClick={() => removeStudent(r.roll_number)}

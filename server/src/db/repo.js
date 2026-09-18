@@ -1,4 +1,5 @@
 // 데이터 접근 계층. 라우트 파일은 SQL을 직접 안 쓰고 여기 있는 이름 붙은 함수만 부른다.
+import crypto from 'node:crypto';
 import { db } from './index.js';
 import { getStandardByCode } from '../services/curriculumStandards.js';
 
@@ -300,10 +301,26 @@ export async function deleteRosterEntry(rollNumber) {
   await db.prepare('DELETE FROM roster WHERE roll_number = ?').run(rollNumber);
 }
 
+// 한 학생의 학습 기록만 완전히 지운다. 명단(roster)은 유지하고, 해당 출석번호로 쌓인
+// 모든 시험 세션을 삭제한다. answers와 warning_events는 exam_sessions를 부모로 둔
+// ON DELETE CASCADE 관계라 답안·점수·문항별 소요시간·필기 획·화면 이탈 기록까지 함께
+// 삭제된다. 학기 말 일괄 파기와 정보주체 삭제 요청 처리에 공통으로 사용할 수 있다.
+export async function deleteLearningDataForRollNumber(rollNumber) {
+  const result = db.prepare('DELETE FROM exam_sessions WHERE roll_number = ?').run(rollNumber);
+  return Number(result.changes);
+}
+
 // ---- sessions ----
 
 export async function getSession(sessionId) {
   return db.prepare('SELECT * FROM exam_sessions WHERE id = ?').get(sessionId);
+}
+
+// 학생용 화면(로그인 없음)은 순차 정수 id 대신 이걸로만 자기 세션을 조회한다 - 다른 학생의
+// 세션 id를 추측해서 답안/현재 문항을 들여다볼 수 없게 하기 위함.
+export async function getSessionByToken(token) {
+  if (!token) return undefined;
+  return db.prepare('SELECT * FROM exam_sessions WHERE access_token = ?').get(token);
 }
 
 export async function getSessionByExamAndRoll(examId, rollNumber) {
@@ -311,9 +328,10 @@ export async function getSessionByExamAndRoll(examId, rollNumber) {
 }
 
 export async function createSession(examId, rollNumber) {
+  const accessToken = crypto.randomBytes(24).toString('base64url');
   const result = await db
-    .prepare('INSERT INTO exam_sessions (exam_id, roll_number, status) VALUES (?, ?, ?)')
-    .run(examId, rollNumber, 'joined');
+    .prepare('INSERT INTO exam_sessions (exam_id, roll_number, status, access_token) VALUES (?, ?, ?, ?)')
+    .run(examId, rollNumber, 'joined', accessToken);
   return getSession(result.lastInsertRowid);
 }
 
