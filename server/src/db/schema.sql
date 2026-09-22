@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS exams (
   -- 교사가 감독 화면에서 "시험 전체 종료"를 눌러 실제로 끝낸 시각. "시험 재시작"을
   -- 누르면 다시 NULL로 돌아간다 - 감독 화면이 대기중/감독중/종료됨을 구분하는 기준.
   ends_at TEXT,
+  -- 학생 신규 입장 허용 여부. 시험 시작 시 자동으로 닫히며 교사가 감독 화면에서
+  -- 시작 전에 먼저 닫거나, 필요한 경우 다시 열 수 있다.
+  admission_closed INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

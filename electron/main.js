@@ -14,8 +14,9 @@
 // 입력받아 서버가 dataDir/settings.json에 저장한다(server/src/services/appSettings.js) -
 // 설정 창이 두 군데로 갈라지면 헷갈리므로, 이 셸은 창을 띄우고 서버를 관리하는 역할만 한다.
 
-const { app, BrowserWindow, dialog, Menu, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require('electron');
 const { spawn, spawnSync } = require('child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
@@ -28,9 +29,89 @@ let serverProcess = null;
 let mainWindow = null;
 let stoppingServer = false;
 let recentServerOutput = [];
+let activeDataDir = null;
+const setupToken = crypto.randomBytes(32).toString('base64url');
+
+function storageLocationConfigPath() {
+  return path.join(app.getPath('userData'), 'storage-location.json');
+}
+
+function defaultDataDir() {
+  return path.join(app.getPath('userData'), 'data');
+}
+
+function readConfiguredDataDir() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(storageLocationConfigPath(), 'utf8'));
+    if (typeof parsed.dataDir === 'string' && path.isAbsolute(parsed.dataDir)) {
+      return path.normalize(parsed.dataDir);
+    }
+  } catch {
+    // 첫 실행 또는 손상된 설정이면 아래 첫 실행 선택 절차로 복구한다.
+  }
+  return null;
+}
+
+function readStorageConfig() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(storageLocationConfigPath(), 'utf8'));
+    return {
+      dataDir: typeof parsed.dataDir === 'string' ? parsed.dataDir : null,
+      previousDataDirs: Array.isArray(parsed.previousDataDirs) ? parsed.previousDataDirs : [],
+    };
+  } catch {
+    return { dataDir: null, previousDataDirs: [] };
+  }
+}
+
+function saveConfiguredDataDir(dataDir, previousDataDirs = readStorageConfig().previousDataDirs) {
+  const configPath = storageLocationConfigPath();
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const temporaryPath = `${configPath}.tmp`;
+  fs.writeFileSync(temporaryPath, JSON.stringify({ dataDir, previousDataDirs }, null, 2), 'utf8');
+  fs.renameSync(temporaryPath, configPath);
+}
+
+async function selectInitialDataDir() {
+  const configured = readConfiguredDataDir();
+  if (configured) return configured;
+
+  // 이전 버전에서 이미 기본 위치에 데이터를 만든 사용자는 업그레이드 후 갑자기 빈 폴더를
+  // 고르게 하지 않는다. 기존 위치를 자동 등록해 시험·학생 데이터가 그대로 이어지게 한다.
+  const previousDefault = defaultDataDir();
+  if (directoryHasContents(previousDefault)) {
+    saveConfiguredDataDir(previousDefault);
+    return previousDefault;
+  }
+
+  const choice = dialog.showMessageBoxSync({
+    type: 'question',
+    title: 'ScoreLab 데이터 저장 위치',
+    message: '시험지와 학생 학습 데이터를 저장할 위치를 선택해주세요.',
+    detail: '선택한 폴더 안에 ScoreLab 전용 폴더가 만들어집니다. 학교에서 관리하는 저장장치를 권장합니다.',
+    buttons: ['저장 폴더 선택', '기본 위치 사용'],
+    defaultId: 0,
+    cancelId: 1,
+  });
+
+  let dataDir = defaultDataDir();
+  if (choice === 0) {
+    const selected = await dialog.showOpenDialog({
+      title: 'ScoreLab 데이터를 저장할 상위 폴더 선택',
+      defaultPath: app.getPath('documents'),
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (!selected.canceled && selected.filePaths[0]) {
+      dataDir = path.join(selected.filePaths[0], 'ScoreLab');
+    }
+  }
+  fs.mkdirSync(dataDir, { recursive: true });
+  saveConfiguredDataDir(dataDir);
+  return dataDir;
+}
 
 function serverLogPath() {
-  return path.join(app.getPath('userData'), 'logs', 'server.log');
+  return path.join(activeDataDir || defaultDataDir(), 'logs', 'server.log');
 }
 
 function recordServerOutput(chunk) {
@@ -68,7 +149,9 @@ function startServer() {
       PORT: String(PORT),
       // 설치 폴더는 쓰기 권한이 없을 수 있으니, 실제 시험지/응시 데이터는 사용자별
       // 데이터 폴더(Windows면 %APPDATA%\ScoreLab)에 저장한다.
-      SCORELAB_DATA_DIR: path.join(app.getPath('userData'), 'data'),
+      SCORELAB_DATA_DIR: activeDataDir || defaultDataDir(),
+      // 최초 비밀번호 설정은 이 Electron 실행이 만든 일회용 토큰이 있어야만 가능하다.
+      SCORELAB_SETUP_TOKEN: setupToken,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: process.platform === 'win32',
@@ -144,6 +227,7 @@ function createWindow() {
     menuBarVisible: false,
     webPreferences: {
       contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
     },
   });
   mainWindow.loadURL(`http://localhost:${PORT}`);
@@ -158,6 +242,73 @@ function createWindow() {
     mainWindow = null;
   });
 }
+
+function directoryHasContents(directory) {
+  return fs.existsSync(directory) && fs.readdirSync(directory).length > 0;
+}
+
+ipcMain.handle('storage:get-location', () => {
+  const config = readStorageConfig();
+  const previousDataDirs = config.previousDataDirs
+    .filter((item) => item && typeof item.path === 'string' && !item.acknowledged)
+    .map((item) => ({ ...item, exists: fs.existsSync(item.path) }));
+  return { dataDir: activeDataDir, previousDataDirs };
+});
+
+ipcMain.handle('storage:acknowledge-previous-location', (_event, previousPath) => {
+  const config = readStorageConfig();
+  const previousDataDirs = config.previousDataDirs.map((item) =>
+    item?.path === previousPath ? { ...item, acknowledged: true, acknowledgedAt: new Date().toISOString() } : item,
+  );
+  saveConfiguredDataDir(activeDataDir, previousDataDirs);
+  return { ok: true };
+});
+
+ipcMain.handle('storage:change-location', async () => {
+  const selected = await dialog.showOpenDialog(mainWindow, {
+    title: 'ScoreLab 데이터를 저장할 새 상위 폴더 선택',
+    defaultPath: activeDataDir ? path.dirname(activeDataDir) : app.getPath('documents'),
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (selected.canceled || !selected.filePaths[0]) return { changed: false };
+
+  const nextDataDir = path.normalize(path.join(selected.filePaths[0], 'ScoreLab'));
+  if (path.resolve(nextDataDir) === path.resolve(activeDataDir)) return { changed: false };
+  if (directoryHasContents(nextDataDir)) {
+    throw new Error('선택한 위치의 ScoreLab 폴더가 비어 있지 않습니다. 다른 폴더를 선택해주세요.');
+  }
+
+  const confirmation = dialog.showMessageBoxSync(mainWindow, {
+    type: 'warning',
+    title: '데이터 저장 위치 변경',
+    message: '현재 데이터를 새 위치로 복사하고 ScoreLab을 다시 시작할까요?',
+    detail: `새 위치: ${nextDataDir}\n\n안전을 위해 기존 위치의 원본은 자동 삭제하지 않습니다. 새 위치에서 정상 동작하는지 확인한 뒤 기존 폴더를 직접 삭제해주세요.`,
+    buttons: ['복사 후 다시 시작', '취소'],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (confirmation !== 0) return { changed: false };
+
+  stopServer();
+  fs.mkdirSync(nextDataDir, { recursive: true });
+  if (fs.existsSync(activeDataDir)) {
+    fs.cpSync(activeDataDir, nextDataDir, { recursive: true, errorOnExist: true, force: false });
+  }
+  const previousDataDir = activeDataDir;
+  const storageConfig = readStorageConfig();
+  const previousDataDirs = [
+    ...storageConfig.previousDataDirs,
+    { path: previousDataDir, changedAt: new Date().toISOString(), acknowledged: false },
+  ];
+  saveConfiguredDataDir(nextDataDir, previousDataDirs);
+  activeDataDir = nextDataDir;
+
+  setTimeout(() => {
+    app.relaunch();
+    app.exit(0);
+  }, 300);
+  return { changed: true, dataDir: nextDataDir, previousDataDir };
+});
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -186,6 +337,7 @@ if (!gotLock) {
       return;
     }
 
+    activeDataDir = await selectInitialDataDir();
     startServer();
     try {
       await waitForServer(Date.now() + 60_000);

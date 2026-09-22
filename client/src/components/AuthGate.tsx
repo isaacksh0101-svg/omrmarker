@@ -1,9 +1,11 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { api, ApiError } from '../api/client';
 import { Card } from './Card';
 import { Button } from './Button';
 
-type Status = { hasPassword: boolean; authenticated: boolean };
+type Status = { hasPassword: boolean; authenticated: boolean; setupToken?: string };
+
+const IDLE_LOCK_MS = 30 * 60 * 1000;
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<Status | null>(null);
@@ -11,6 +13,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const idleTimer = useRef<number | null>(null);
 
   const loadStatus = () => {
     api
@@ -28,21 +32,47 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('scorelab:unauthorized', onUnauthorized);
   }, []);
 
+  useEffect(() => {
+    if (!status?.authenticated) return;
+
+    const lock = () => {
+      void api.post('/auth/logout').catch(() => undefined);
+      setStatus((current) => current ? { ...current, authenticated: false } : current);
+      setNotice('30분 동안 사용하지 않아 교사 화면을 자동으로 잠갔습니다.');
+    };
+    const resetTimer = () => {
+      if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);
+      idleTimer.current = window.setTimeout(lock, IDLE_LOCK_MS);
+    };
+    const events: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'touchstart', 'scroll'];
+    events.forEach((eventName) => window.addEventListener(eventName, resetTimer, { passive: true }));
+    resetTimer();
+    return () => {
+      events.forEach((eventName) => window.removeEventListener(eventName, resetTimer));
+      if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);
+    };
+  }, [status?.authenticated]);
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
 
     const isSetup = status ? !status.hasPassword : false;
     if (isSetup) {
-      if (password.length < 4) return setError('비밀번호는 4자 이상이어야 합니다.');
+      if (password.length < 8) return setError('비밀번호는 8자 이상이어야 합니다.');
+      if (password.length > 128) return setError('비밀번호는 128자 이하로 입력해주세요.');
       if (password !== confirmPassword) return setError('비밀번호가 서로 다릅니다.');
     }
 
     setSubmitting(true);
     try {
-      await api.post(isSetup ? '/auth/set-password' : '/auth/login', { password });
+      await api.post(isSetup ? '/auth/set-password' : '/auth/login', {
+        password,
+        ...(isSetup ? { setupToken: status?.setupToken } : {}),
+      });
       setPassword('');
       setConfirmPassword('');
+      setNotice(null);
       loadStatus();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '처리 중 오류가 발생했습니다.');
@@ -71,6 +101,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
             : '교사 전용 화면입니다. 비밀번호를 입력해주세요.'}
         </p>
         <form onSubmit={handleSubmit} className="mt-4 flex flex-col gap-2.5">
+          {notice && <p className="rounded-xl bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800">{notice}</p>}
           <input
             type="password"
             value={password}
@@ -78,6 +109,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
             placeholder="비밀번호"
             autoFocus
             autoComplete={isSetup ? 'new-password' : 'current-password'}
+            maxLength={128}
             className="rounded-xl border border-line bg-bg/70 px-3.5 py-2.5 text-sm outline-none"
           />
           {isSetup && (
@@ -87,6 +119,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="비밀번호 확인"
               autoComplete="new-password"
+              maxLength={128}
               className="rounded-xl border border-line bg-bg/70 px-3.5 py-2.5 text-sm outline-none"
             />
           )}

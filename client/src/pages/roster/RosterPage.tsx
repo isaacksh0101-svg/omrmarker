@@ -39,6 +39,9 @@ export function RosterPage() {
   const [bulkSaving, setBulkSaving] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [selectedRolls, setSelectedRolls] = useState<Set<number>>(new Set());
+  const [deletingLearningData, setDeletingLearningData] = useState(false);
+  const [learningDataDeleteMode, setLearningDataDeleteMode] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function reload() {
@@ -95,21 +98,52 @@ export function RosterPage() {
   async function removeStudent(roll: number) {
     if (!confirm(`${roll}번을 명단에서 삭제할까요?`)) return;
     await api.delete(`/roster/${roll}`);
+    setSelectedRolls((current) => {
+      const next = new Set(current);
+      next.delete(roll);
+      return next;
+    });
     reload();
   }
 
-  async function removeLearningData(roll: number) {
-    if (
-      !confirm(
-        `${roll}번 학생의 모든 학습 데이터를 완전 삭제할까요?\n\n응시 기록, 답안, 점수, 문항별 소요시간, 필기와 화면 이탈 기록이 삭제되며 되돌릴 수 없습니다. 학생 명단은 유지됩니다.`,
-      )
-    ) return;
+  async function removeSelectedLearningData() {
+    const rolls = [...selectedRolls].sort((a, b) => a - b);
+    if (rolls.length === 0) return;
+    const label = rolls.length === roster.length ? `전체 학생 ${rolls.length}명` : `선택한 학생 ${rolls.length}명 (${rolls.join(', ')}번)`;
+    if (!confirm(`${label}의 학습 데이터를 완전 삭제할까요?\n\n응시 기록, 답안, 점수, 문항별 소요시간, 필기와 화면 이탈 기록이 삭제되며 되돌릴 수 없습니다. 학생 명단은 유지됩니다.`)) return;
+    setDeletingLearningData(true);
+    setError(null);
     try {
-      await api.delete(`/roster/${roll}/learning-data`);
-      alert(`${roll}번 학생의 학습 데이터를 완전 삭제했습니다.`);
+      const result = await api.delete<{ deletedSessions: number }>('/roster/learning-data', { roll_numbers: rolls });
+      setSelectedRolls(new Set());
+      setLearningDataDeleteMode(false);
+      window.dispatchEvent(new Event('scorelab:data-retention-changed'));
+      alert(`${label}의 학습 데이터 삭제를 완료했습니다. 삭제된 응시 기록: ${result.deletedSessions}건`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : '학습 데이터 삭제 중 오류가 발생했습니다.');
+    } finally {
+      setDeletingLearningData(false);
     }
+  }
+
+  const allSelected = roster.length > 0 && selectedRolls.size === roster.length;
+
+  function toggleAll() {
+    setSelectedRolls(allSelected ? new Set() : new Set(roster.map((entry) => entry.roll_number)));
+  }
+
+  function toggleStudent(roll: number) {
+    setSelectedRolls((current) => {
+      const next = new Set(current);
+      if (next.has(roll)) next.delete(roll);
+      else next.add(roll);
+      return next;
+    });
+  }
+
+  function closeLearningDataDeleteMode() {
+    setSelectedRolls(new Set());
+    setLearningDataDeleteMode(false);
   }
 
   function downloadTemplate() {
@@ -228,7 +262,29 @@ export function RosterPage() {
       </Card>
 
       <div className="animate-fade-in-up mt-9" style={{ animationDelay: '60ms' }}>
-        <h2 className="text-sm font-bold text-ink">등록된 학생 ({roster.length}명)</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-bold text-ink">등록된 학생 ({roster.length}명)</h2>
+          {roster.length > 0 && (
+            learningDataDeleteMode ? (
+              <div className="flex items-center gap-2">
+                <Button data-testid="cancel-learning-data-delete-mode" variant="secondary" disabled={deletingLearningData} onClick={closeLearningDataDeleteMode}>
+                  취소
+                </Button>
+                <Button data-testid="delete-selected-learning-data" variant="danger" disabled={selectedRolls.size === 0 || deletingLearningData} onClick={removeSelectedLearningData}>
+                  {deletingLearningData ? '삭제 중...' : `선택 삭제 (${selectedRolls.size}명)`}
+                </Button>
+              </div>
+            ) : (
+              <Button
+                data-testid="open-learning-data-delete-mode"
+                variant="secondary"
+                onClick={() => setLearningDataDeleteMode(true)}
+              >
+                학습 데이터 삭제
+              </Button>
+            )
+          )}
+        </div>
         {roster.length === 0 ? (
           <p className="mt-3 text-sm text-ink-soft">아직 등록된 학생이 없습니다.</p>
         ) : (
@@ -236,32 +292,52 @@ export function RosterPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-line text-left text-xs font-bold text-ink-soft">
+                  {learningDataDeleteMode && (
+                    <th className="w-12 px-4 py-2.5">
+                      <input
+                        type="checkbox"
+                        data-testid="select-all-students"
+                        aria-label="학생 전체 선택"
+                        checked={allSelected}
+                        onChange={toggleAll}
+                        className="h-4 w-4 accent-accent"
+                      />
+                    </th>
+                  )}
                   <th className="px-4 py-2.5">출석번호</th>
                   <th className="px-4 py-2.5">이름</th>
-                  <th className="px-4 py-2.5 text-right">관리</th>
+                  {!learningDataDeleteMode && <th className="px-4 py-2.5 text-right">관리</th>}
                 </tr>
               </thead>
               <tbody>
                 {roster.map((r) => (
                   <tr key={r.roll_number} className="border-b border-line last:border-0">
+                    {learningDataDeleteMode && (
+                      <td className="px-4 py-2.5">
+                        <input
+                          type="checkbox"
+                          data-testid={`select-student-${r.roll_number}`}
+                          aria-label={`${r.roll_number}번 학생 선택`}
+                          checked={selectedRolls.has(r.roll_number)}
+                          onChange={() => toggleStudent(r.roll_number)}
+                          className="h-4 w-4 accent-accent"
+                        />
+                      </td>
+                    )}
                     <td className="px-4 py-2.5 font-bold text-ink">{r.roll_number}</td>
                     <td className="px-1.5 py-1">
                       <NameCell roll={r.roll_number} name={r.name} onSaved={reload} />
                     </td>
-                    <td className="px-4 py-2.5 text-right">
-                      <button
-                        className="mr-3 text-xs font-bold text-danger hover:underline"
-                        onClick={() => removeLearningData(r.roll_number)}
-                      >
-                        학습 데이터 삭제
-                      </button>
-                      <button
-                        className="text-xs text-ink-soft hover:text-danger"
-                        onClick={() => removeStudent(r.roll_number)}
-                      >
-                        삭제
-                      </button>
-                    </td>
+                    {!learningDataDeleteMode && (
+                      <td className="px-4 py-2.5 text-right">
+                        <button
+                          className="text-xs text-ink-soft hover:text-danger"
+                          onClick={() => removeStudent(r.roll_number)}
+                        >
+                          삭제
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

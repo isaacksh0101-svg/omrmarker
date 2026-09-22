@@ -34,6 +34,9 @@ if (!examColumns.includes('archived_from_status')) {
 if (!examColumns.includes('memo')) {
   db.exec('ALTER TABLE exams ADD COLUMN memo TEXT');
 }
+if (!examColumns.includes('admission_closed')) {
+  db.exec('ALTER TABLE exams ADD COLUMN admission_closed INTEGER NOT NULL DEFAULT 0');
+}
 
 const sessionColumns = db.prepare('PRAGMA table_info(exam_sessions)').all().map((c) => c.name);
 if (!sessionColumns.includes('extra_time_sec')) {

@@ -16,6 +16,16 @@ rosterRouter.post('/', async (req, res) => {
   res.status(201).json(await repo.getRosterEntry(roll_number));
 });
 
+rosterRouter.delete('/learning-data', async (req, res) => {
+  const rollNumbers = Array.isArray(req.body?.roll_numbers) ? req.body.roll_numbers.map(Number) : [];
+  const validRolls = [...new Set(rollNumbers)].filter((roll) => Number.isInteger(roll) && roll > 0);
+  if (validRolls.length === 0 || validRolls.length > 500) {
+    return res.status(400).json({ error: '삭제할 학생을 1명 이상 500명 이하로 선택해주세요.' });
+  }
+  const deletedSessions = await repo.deleteLearningDataForRollNumbers(validRolls);
+  res.json({ ok: true, selectedStudents: validRolls.length, deletedSessions });
+});
+
 rosterRouter.delete('/:rollNumber', async (req, res) => {
   await repo.deleteRosterEntry(Number(req.params.rollNumber));
   res.status(204).end();

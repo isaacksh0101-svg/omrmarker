@@ -2,12 +2,12 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import express from 'express';
-import cors from 'cors';
 import QRCode from 'qrcode';
 import { Server as SocketIOServer } from 'socket.io';
 
 import { config } from './config.js';
-import { getLanIp, getLanIpCandidates } from './lib/lanIp.js';
+import { getLanIp, getLanIpCandidates, isAddressInSubnet } from './lib/lanIp.js';
+import { getStudentNetworkAddress } from './services/appSettings.js';
 import { setIO, monitorRoom, emitExamMonitorUpdate } from './lib/realtime.js';
 import './db/index.js'; // DB 연결 + 스키마 초기화 (부작용으로 초기화됨)
 import * as repo from './db/repo.js';
@@ -20,10 +20,38 @@ import { backupRouter } from './routes/backup.js';
 import { settingsRouter } from './routes/settings.js';
 import { authRouter } from './routes/auth.js';
 import { isLoopbackRequest, requireAuth } from './middleware/auth.js';
+import { requireTrustedBrowserRequest, trustedBrowserRequest } from './middleware/requestSecurity.js';
 
 const app = express();
-app.use(cors());
+app.disable('x-powered-by');
+app.use(requireTrustedBrowserRequest);
 app.use(express.json());
+
+function normalizedRemoteAddress(req) {
+  const address = req.socket?.remoteAddress || req.connection?.remoteAddress || '';
+  return address.startsWith('::ffff:') ? address.slice(7) : address;
+}
+
+function studentNetworkAccess(req) {
+  if (isLoopbackRequest(req)) return { allowed: true };
+  const selectedAddress = getStudentNetworkAddress();
+  const selected = getLanIpCandidates().find((candidate) => candidate.address === selectedAddress);
+  if (!selected) return { allowed: false, error: '교사가 학생 접속용 네트워크를 아직 선택하지 않았습니다.' };
+  if (selected.networkCategory === 'Public') return { allowed: false, error: '공용 네트워크에서는 ScoreLab 학생 접속이 차단됩니다.' };
+  if (!isAddressInSubnet(normalizedRemoteAddress(req), selected.address, selected.netmask)) {
+    return { allowed: false, error: '허용된 학교 내부 네트워크에서만 접속할 수 있습니다.' };
+  }
+  return { allowed: true };
+}
+
+// 학생용 서버는 교사가 환경설정에서 명시적으로 선택한 네트워크 하나에만 연다.
+// localhost 교사 화면은 항상 허용하고, LAN 요청은 선택한 어댑터와 같은 서브넷이면서
+// Windows 공용(Public) 네트워크가 아닐 때만 통과시킨다.
+app.use((req, res, next) => {
+  const access = studentNetworkAccess(req);
+  if (access.allowed) return next();
+  return res.status(403).json({ error: access.error });
+});
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true });
@@ -50,9 +78,7 @@ app.use('/api/settings', requireAuth, settingsRouter);
 
 // 호스트/IPv4 형태만 허용(간단한 검증). 교사가 직접 입력한 값을 그대로 URL에 꽂으므로
 // 최소한의 형식 검사만 하고 실제로 연결되는지는 교사가 학생 기기로 직접 테스트해서 확인한다.
-const isValidHostOverride = (value) => typeof value === 'string' && /^[a-zA-Z0-9.-]{1,255}$/.test(value);
-
-app.get('/api/lan-info', async (req, res) => {
+app.get('/api/lan-info', requireAuth, async (_req, res) => {
   // 항상 실제 LAN IP를 기준으로 만든다. 교사가 대시보드를 localhost로 보고 있어도
   // (예: 실행하기.bat가 자동으로 여는 주소) QR/링크는 반드시 다른 기기가 접속 가능한
   // 실제 IP를 가리켜야 한다 - 요청의 host 헤더를 그대로 쓰면 localhost가 그대로 QR에
@@ -62,16 +88,17 @@ app.get('/api/lan-info', async (req, res) => {
   // 다른 네트워크일 수 있다. candidates에 전부 나열해서 교사가 직접 골라 테스트하고,
   // ?ip= 로 특정 주소를 강제 지정할 수 있게 한다(같은 네트워크의 후보가 여러 개일 때, 또는
   // 자동 탐지에 안 잡히는 주소를 알고 있을 때).
-  const override = req.query.ip;
   const candidates = getLanIpCandidates();
-  const ip = isValidHostOverride(override) ? override : getLanIp();
+  const savedAddress = getStudentNetworkAddress();
+  const selected = candidates.find((candidate) => candidate.address === savedAddress) ?? null;
+  const ip = selected?.address || getLanIp();
   const url = `http://${ip}:${config.port}`;
   const studentUrl = `${url}/student`;
   // client/dist가 없으면(=npm run dev로 개발 서버만 켜둔 상태) 이 포트는 API만 응답하고
   // /student 같은 화면 경로는 서빙하지 않는다. QR은 그대로 보여주되 화면에서 경고해야 한다.
   const servingClient = fs.existsSync(config.clientDistDir);
   const qr = await QRCode.toDataURL(studentUrl).catch(() => null);
-  res.json({ url, studentUrl, qr, servingClient, candidates, selectedIp: ip });
+  res.json({ url, studentUrl, qr, servingClient, candidates, selectedIp: ip, selected, accessReady: Boolean(selected) && selected.networkCategory !== 'Public' });
 });
 
 // SPA의 교사 화면 URL도 LAN에서 직접 열리지 않게 막는다. 정적 JS/CSS는 학생 화면과
@@ -109,7 +136,10 @@ app.use((err, _req, res, next) => {
 
 const httpServer = http.createServer(app);
 const io = new SocketIOServer(httpServer, {
-  cors: { origin: '*' },
+  allowRequest: (req, callback) => callback(
+    null,
+    trustedBrowserRequest(req) && studentNetworkAccess(req).allowed,
+  ),
 });
 
 setIO(io);

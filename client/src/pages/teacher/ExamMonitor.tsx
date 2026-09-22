@@ -291,12 +291,14 @@ export function ExamMonitor() {
     }
   }
 
-  async function startExam(waitingCount: number, alreadyStarted: boolean) {
+  async function startExam(waitingStudents: MonitorStudent[], alreadyStarted: boolean) {
+    const waitingCount = waitingStudents.length;
+    const rolls = waitingStudents.map((student) => `${student.roll_number}번`).join(', ') || '없음';
     const message = alreadyStarted
       ? `아직 대기 중인 학생 ${waitingCount}명을 지금 시작할까요?`
       : waitingCount > 0
-        ? `지금 시험을 시작할까요? 입장한 학생 ${waitingCount}명의 화면에 바로 첫 문항이 표시됩니다.`
-        : '지금 시험을 시작할까요? 이후 입장하는 학생은 대기 화면 없이 바로 첫 문항부터 응시합니다.';
+        ? `접속 학생을 확인해주세요.\n\n${rolls}\n\n총 ${waitingCount}명이 맞으면 시험을 시작합니다. 시작과 동시에 신규 입장이 마감됩니다.`
+        : '현재 접속한 학생이 없습니다. 그래도 시험을 시작할까요? 시작과 동시에 신규 입장이 마감됩니다.';
     if (!confirm(message)) return;
     try {
       await api.post(`/exams/${examId}/start`);
@@ -361,6 +363,7 @@ export function ExamMonitor() {
   const submittedCount = data.students.filter((s) => s.status === 'submitted' || s.status === 'force_submitted').length;
   const flaggedCount = data.students.filter((s) => (s.warning_count ?? 0) > 0).length;
   const waitingCount = data.students.filter((s) => s.status === 'joined').length;
+  const waitingStudents = data.students.filter((s) => s.status === 'joined');
   const activeCount = data.students.filter((s) => s.status === 'joined' || s.status === 'in_progress').length;
   const examStarted = !!data.exam.started_at;
   // "시험 전체 종료" 버튼을 누른 게 1차 기준(exam.ends_at)이지만, 그 뒤에 지각 학생이
@@ -396,9 +399,9 @@ export function ExamMonitor() {
           {!examEnded && (
             <>
               {!examStarted ? (
-                <Button onClick={() => startExam(waitingCount, false)}>시험 시작</Button>
+                <Button onClick={() => startExam(waitingStudents, false)}>접속 학생 확인 후 시작</Button>
               ) : waitingCount > 0 ? (
-                <Button onClick={() => startExam(waitingCount, true)}>대기 중인 학생 시작 ({waitingCount}명)</Button>
+                <Button onClick={() => startExam(waitingStudents, true)}>대기 중인 학생 시작 ({waitingCount}명)</Button>
               ) : (
                 <Badge tone="good">모든 학생 시작함</Badge>
               )}

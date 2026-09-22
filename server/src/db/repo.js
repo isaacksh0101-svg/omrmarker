@@ -46,7 +46,7 @@ export async function getExamFull(id) {
 export async function listExams() {
   return db
     .prepare(
-      'SELECT id, title, subject_id, grade_cluster, time_limit_sec, mode, status, memo, started_at, ends_at, created_at FROM exams ORDER BY created_at DESC',
+      'SELECT id, title, subject_id, grade_cluster, time_limit_sec, mode, status, memo, started_at, ends_at, admission_closed, created_at FROM exams ORDER BY created_at DESC',
     )
     .all();
 }
@@ -306,8 +306,88 @@ export async function deleteRosterEntry(rollNumber) {
 // ON DELETE CASCADE 관계라 답안·점수·문항별 소요시간·필기 획·화면 이탈 기록까지 함께
 // 삭제된다. 학기 말 일괄 파기와 정보주체 삭제 요청 처리에 공통으로 사용할 수 있다.
 export async function deleteLearningDataForRollNumber(rollNumber) {
-  const result = db.prepare('DELETE FROM exam_sessions WHERE roll_number = ?').run(rollNumber);
-  return Number(result.changes);
+  return deleteLearningDataForRollNumbers([rollNumber]);
+}
+
+export async function deleteLearningDataForRollNumbers(rollNumbers) {
+  const uniqueRolls = [...new Set(rollNumbers)].filter((roll) => Number.isInteger(roll) && roll > 0);
+  if (uniqueRolls.length === 0) return 0;
+  const placeholders = uniqueRolls.map(() => '?').join(', ');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const affectedExamIds = db
+      .prepare(`SELECT DISTINCT exam_id FROM exam_sessions WHERE roll_number IN (${placeholders})`)
+      .all(...uniqueRolls)
+      .map((row) => row.exam_id);
+    const result = db
+      .prepare(`DELETE FROM exam_sessions WHERE roll_number IN (${placeholders})`)
+      .run(...uniqueRolls);
+    const resetExam = db.prepare(
+      'UPDATE exams SET started_at = NULL, ends_at = NULL, admission_closed = 0, updated_at = ? WHERE id = ? AND NOT EXISTS (SELECT 1 FROM exam_sessions WHERE exam_id = exams.id)',
+    );
+    for (const examId of affectedExamIds) resetExam.run(now(), examId);
+    db.exec('COMMIT');
+    return Number(result.changes);
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function academicYearForDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const koreaDate = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  return koreaDate.getUTCMonth() >= 2 ? koreaDate.getUTCFullYear() : koreaDate.getUTCFullYear() - 1;
+}
+
+export async function getLearningDataRetentionStatus() {
+  const rows = db
+    .prepare("SELECT id, COALESCE(submitted_at, started_at) AS activity_at FROM exam_sessions WHERE submitted_at IS NOT NULL OR started_at IS NOT NULL")
+    .all();
+  const byAcademicYear = new Map();
+  for (const row of rows) {
+    const academicYear = academicYearForDate(row.activity_at);
+    if (academicYear == null) continue;
+    byAcademicYear.set(academicYear, (byAcademicYear.get(academicYear) || 0) + 1);
+  }
+  const nowDate = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const currentAcademicYear = nowDate.getUTCMonth() >= 2 ? nowDate.getUTCFullYear() : nowDate.getUTCFullYear() - 1;
+  const years = [...byAcademicYear.entries()]
+    .map(([academicYear, sessionCount]) => ({ academicYear, sessionCount }))
+    .sort((a, b) => b.academicYear - a.academicYear);
+  return {
+    currentAcademicYear,
+    previousSessionCount: years
+      .filter((item) => item.academicYear < currentAcademicYear)
+      .reduce((sum, item) => sum + item.sessionCount, 0),
+    years,
+  };
+}
+
+export async function deleteLearningDataForAcademicYear(academicYear) {
+  const koreaOffsetMs = 9 * 60 * 60 * 1000;
+  const start = new Date(Date.UTC(academicYear, 2, 1) - koreaOffsetMs).toISOString();
+  const end = new Date(Date.UTC(academicYear + 1, 2, 1) - koreaOffsetMs).toISOString();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const affectedExamIds = db
+      .prepare("SELECT DISTINCT exam_id FROM exam_sessions WHERE COALESCE(submitted_at, started_at) >= ? AND COALESCE(submitted_at, started_at) < ?")
+      .all(start, end)
+      .map((row) => row.exam_id);
+    const result = db
+      .prepare("DELETE FROM exam_sessions WHERE COALESCE(submitted_at, started_at) >= ? AND COALESCE(submitted_at, started_at) < ?")
+      .run(start, end);
+    const resetExam = db.prepare(
+      'UPDATE exams SET started_at = NULL, ends_at = NULL, admission_closed = 0, updated_at = ? WHERE id = ? AND NOT EXISTS (SELECT 1 FROM exam_sessions WHERE exam_id = exams.id)',
+    );
+    for (const examId of affectedExamIds) resetExam.run(now(), examId);
+    db.exec('COMMIT');
+    return Number(result.changes);
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 // ---- sessions ----
@@ -350,7 +430,7 @@ export async function startSession(sessionId) {
 // (COALESCE) - 다시 눌러도 이미 응시 중인 학생들의 제한시간이 리셋되지 않는다.
 export async function markExamStarted(examId) {
   await db
-    .prepare("UPDATE exams SET started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?")
+    .prepare("UPDATE exams SET started_at = COALESCE(started_at, ?), admission_closed = 1, updated_at = ? WHERE id = ?")
     .run(now(), now(), examId);
 }
 
@@ -361,7 +441,7 @@ export async function markExamEnded(examId) {
 }
 
 export async function clearExamEnded(examId) {
-  await db.prepare('UPDATE exams SET ends_at = NULL, updated_at = ? WHERE id = ?').run(now(), examId);
+  await db.prepare('UPDATE exams SET ends_at = NULL, admission_closed = 0, updated_at = ? WHERE id = ?').run(now(), examId);
 }
 
 // 아직 대기 중(joined)인 학생 전원을 한 번에 응시 상태로 바꾼다. 새로 입장하는 학생은

@@ -1,39 +1,187 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../../api/client';
-import type { LanInfo } from '../../types';
+import type { LanInfo, LanIpCandidate } from '../../types';
 import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
 import { PageHeader } from '../../components/PageHeader';
 import { IconSettings } from '../../components/icons';
 
-const LAN_IP_STORAGE_KEY = 'omr.lanIpOverride';
+function PasswordSection() {
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function changePassword() {
+    setError(null);
+    setMessage(null);
+    if (password.length < 8) return setError('비밀번호는 8자 이상이어야 합니다.');
+    if (password !== confirmPassword) return setError('비밀번호가 서로 다릅니다.');
+    setSaving(true);
+    try {
+      await api.post('/auth/change-password', { password });
+      setPassword('');
+      setConfirmPassword('');
+      setMessage('비밀번호를 변경하고 기존 로그인 세션을 모두 종료했습니다.');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '비밀번호를 변경하지 못했습니다.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="mt-6">
+      <h2 className="text-sm font-bold text-ink">교사 화면 비밀번호</h2>
+      <p className="mt-1 text-xs leading-relaxed text-ink-soft">
+        8자 이상의 비밀번호를 사용하세요. 변경하면 다른 탭을 포함한 기존 로그인 세션이 모두 종료됩니다.
+      </p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <input
+          type="password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          placeholder="새 비밀번호"
+          autoComplete="new-password"
+          maxLength={128}
+          className="rounded-xl border border-line bg-white px-3 py-2.5 text-sm outline-none"
+        />
+        <input
+          type="password"
+          value={confirmPassword}
+          onChange={(event) => setConfirmPassword(event.target.value)}
+          placeholder="새 비밀번호 확인"
+          autoComplete="new-password"
+          maxLength={128}
+          className="rounded-xl border border-line bg-white px-3 py-2.5 text-sm outline-none"
+        />
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <div>
+          {error && <p className="text-xs font-bold text-danger">{error}</p>}
+          {message && <p className="text-xs font-bold text-good">{message}</p>}
+        </div>
+        <Button variant="secondary" disabled={saving || !password || !confirmPassword} onClick={changePassword}>
+          {saving ? '변경 중...' : '비밀번호 변경'}
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+function StorageLocationSection() {
+  const desktop = window.scorelabDesktop;
+  const [dataDir, setDataDir] = useState<string | null>(null);
+  const [changing, setChanging] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [previousDataDirs, setPreviousDataDirs] = useState<Array<{ path: string; changedAt: string; exists: boolean }>>([]);
+
+  useEffect(() => {
+    if (!desktop) return;
+    desktop.getStorageLocation().then((result) => {
+      setDataDir(result.dataDir);
+      setPreviousDataDirs(result.previousDataDirs || []);
+    }).catch(() => setError('현재 저장 위치를 확인하지 못했습니다.'));
+  }, [desktop]);
+
+  async function changeLocation() {
+    if (!desktop) return;
+    setChanging(true);
+    setError(null);
+    try {
+      const result = await desktop.changeStorageLocation();
+      if (result.changed && result.dataDir) setDataDir(result.dataDir);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '저장 위치를 변경하지 못했습니다.');
+    } finally {
+      setChanging(false);
+    }
+  }
+
+  async function acknowledgePreviousLocation(previousPath: string) {
+    if (!desktop) return;
+    if (!confirm('이전 폴더의 데이터가 삭제되었거나 학교가 허용한 위치에 안전하게 보관 중인지 확인했습니까?')) return;
+    await desktop.acknowledgePreviousStorageLocation(previousPath);
+    setPreviousDataDirs((items) => items.filter((item) => item.path !== previousPath));
+    window.dispatchEvent(new Event('scorelab:storage-location-checked'));
+  }
+
+  return (
+    <Card id="storage-location" className="mt-6 scroll-mt-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-bold text-ink">데이터 저장 위치</h2>
+        {!desktop && (
+          <span className="rounded-md bg-warning/15 px-2 py-0.5 text-[11px] font-bold text-warning">
+            브라우저 미리보기
+          </span>
+        )}
+      </div>
+      <p className="mt-1 text-xs leading-relaxed text-ink-soft">
+        시험지, 학생 학습 데이터, AI 설정, 로그와 복원용 사본이 저장되는 폴더입니다.
+      </p>
+      <div className="mt-3 rounded-xl border border-line bg-bg px-3 py-2.5">
+        <p className={`break-all font-mono text-xs ${desktop ? 'text-ink' : 'text-ink-soft'}`}>
+          {desktop ? dataDir || '확인 중...' : 'C:\\Users\\사용자\\Documents\\ScoreLab'}
+        </p>
+      </div>
+      <p className="mt-2 text-[11px] leading-relaxed text-ink-soft">
+        위치를 바꾸면 현재 데이터를 새 폴더로 복사한 뒤 앱이 다시 시작됩니다. 안전을 위해 기존 폴더는
+        자동 삭제하지 않으므로 새 위치에서 정상 동작하는지 확인한 뒤 직접 삭제하세요.
+      </p>
+      {previousDataDirs.length > 0 && (
+        <div className="mt-3 space-y-2 rounded-xl border border-warning/30 bg-warning/10 p-3">
+          <p className="text-xs font-extrabold text-warning">이전 저장 위치를 확인해주세요</p>
+          {previousDataDirs.map((item) => (
+            <div key={item.path} className="rounded-lg bg-white/70 p-2.5">
+              <p className="break-all font-mono text-[11px] text-ink">{item.path}</p>
+              <p className="mt-1 text-[11px] text-ink-soft">
+                {item.exists ? '폴더가 아직 존재합니다.' : '현재 경로에서 폴더가 확인되지 않습니다.'} · {new Date(item.changedAt).toLocaleDateString()} 변경
+              </p>
+              <button type="button" className="mt-1.5 text-xs font-bold text-warning underline" onClick={() => acknowledgePreviousLocation(item.path)}>
+                삭제 또는 안전한 보관 확인 완료
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {!desktop && (
+        <p className="mt-2 rounded-xl bg-warning/10 px-3 py-2 text-xs text-warning">
+          현재는 브라우저 테스트 화면입니다. Windows 폴더 선택과 데이터 이동은 데스크톱 앱에서 활성화됩니다.
+        </p>
+      )}
+      <div className="mt-3">
+        <Button variant="secondary" disabled={changing || !desktop} onClick={changeLocation}>
+          {changing ? '변경 중...' : '저장 위치 변경'}
+        </Button>
+      </div>
+      {error && <p className="mt-2 text-xs font-bold text-danger">{error}</p>}
+    </Card>
+  );
+}
 
 function StudentAccessSection() {
   const [lanInfo, setLanInfo] = useState<LanInfo | null>(null);
   const [showNetworkSettings, setShowNetworkSettings] = useState(false);
-  const [manualIp, setManualIp] = useState('');
-  const [savedIp, setSavedIp] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [networkError, setNetworkError] = useState<string | null>(null);
 
-  const loadLanInfo = (ipOverride?: string | null) => {
-    const query = ipOverride ? `?ip=${encodeURIComponent(ipOverride)}` : '';
-    api.get<LanInfo>(`/lan-info${query}`).then(setLanInfo).catch(() => {});
+  const loadLanInfo = () => {
+    api.get<LanInfo>('/lan-info').then(setLanInfo).catch(() => {});
   };
 
   useEffect(() => {
-    const saved = localStorage.getItem(LAN_IP_STORAGE_KEY);
-    setSavedIp(saved);
-    loadLanInfo(saved);
+    loadLanInfo();
   }, []);
 
-  const selectIp = (ip: string | null) => {
-    if (ip) {
-      localStorage.setItem(LAN_IP_STORAGE_KEY, ip);
-    } else {
-      localStorage.removeItem(LAN_IP_STORAGE_KEY);
+  const selectNetwork = async (candidate: LanIpCandidate) => {
+    setNetworkError(null);
+    try {
+      await api.put('/settings/network', { address: candidate.address });
+      loadLanInfo();
+    } catch (error) {
+      setNetworkError(error instanceof ApiError ? error.message : '네트워크를 저장하지 못했습니다.');
     }
-    setSavedIp(ip);
-    loadLanInfo(ip);
   };
 
   async function copyLink() {
@@ -71,6 +219,11 @@ function StudentAccessSection() {
         </p>
       ) : (
         <>
+          {!lanInfo.accessReady && (
+            <p data-testid="student-network-required" className="mt-3 rounded-xl bg-warning/10 px-3 py-2 text-sm font-bold text-warning">
+              학생 접속용 학교 내부 네트워크를 먼저 선택해주세요. 공용(Public) 네트워크는 선택할 수 없습니다.
+            </p>
+          )}
           <div className="mt-3 flex flex-wrap items-center gap-4">
             {lanInfo.qr && (
               <img src={lanInfo.qr} alt="학생 접속 QR 코드" className="h-32 w-32 shrink-0 rounded-xl border border-line" />
@@ -80,10 +233,10 @@ function StudentAccessSection() {
                 {lanInfo.studentUrl}
               </p>
               <div className="flex flex-wrap gap-2">
-                <Button variant="secondary" onClick={copyLink}>
+                <Button variant="secondary" disabled={!lanInfo.accessReady} onClick={copyLink}>
                   {copied ? '복사됨!' : '링크 복사'}
                 </Button>
-                <Button variant="secondary" disabled={!lanInfo.qr} onClick={downloadQr}>
+                <Button variant="secondary" disabled={!lanInfo.qr || !lanInfo.accessReady} onClick={downloadQr}>
                   QR 이미지 다운로드
                 </Button>
               </div>
@@ -106,54 +259,105 @@ function StudentAccessSection() {
                 담당자에게 문의해 주세요.
               </p>
               <div className="flex flex-col gap-1">
-                <button
-                  type="button"
-                  onClick={() => selectIp(null)}
-                  className={`rounded-lg border px-2 py-1.5 text-left text-xs ${
-                    !savedIp ? 'border-accent-ink bg-accent-soft text-accent-ink' : 'border-line text-ink-soft'
-                  }`}
-                >
-                  자동 선택 (현재: {lanInfo.selectedIp})
-                </button>
                 {lanInfo.candidates.map((c) => (
                   <button
                     key={c.address}
+                    data-testid={`network-candidate-${c.networkCategory}`}
                     type="button"
-                    onClick={() => selectIp(c.address)}
+                    disabled={c.networkCategory === 'Public'}
+                    onClick={() => selectNetwork(c)}
                     className={`rounded-lg border px-2 py-1.5 text-left text-xs ${
-                      savedIp === c.address
+                      lanInfo.selected?.address === c.address
                         ? 'border-accent-ink bg-accent-soft text-accent-ink'
-                        : 'border-line text-ink-soft'
+                        : c.networkCategory === 'Public'
+                          ? 'cursor-not-allowed border-danger/20 bg-danger/5 text-danger'
+                          : 'border-line text-ink-soft'
                     }`}
                   >
-                    {c.name}: {c.address}
+                    <span className="font-bold">{c.name}: {c.address}</span>
+                    <span className="ml-1">· {c.profileName || '이름 없음'} · {c.networkCategory === 'Public' ? '공용 — 차단' : c.networkCategory}</span>
                   </button>
                 ))}
               </div>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (manualIp.trim()) selectIp(manualIp.trim());
-                }}
-                className="flex gap-1"
-              >
-                <input
-                  value={manualIp}
-                  onChange={(e) => setManualIp(e.target.value)}
-                  placeholder="직접 입력 (예: 192.168.0.10)"
-                  className="min-w-0 flex-1 rounded-lg border border-line px-2 py-1.5 text-xs"
-                />
-                <button
-                  type="submit"
-                  className="shrink-0 rounded-lg border border-line px-3 py-1.5 text-xs font-bold text-ink-soft"
-                >
-                  적용
-                </button>
-              </form>
+              {networkError && <p className="text-xs font-bold text-danger">{networkError}</p>}
             </div>
           )}
         </>
       )}
+    </Card>
+  );
+}
+
+type RetentionStatus = {
+  currentAcademicYear: number;
+  previousSessionCount: number;
+  years: Array<{ academicYear: number; sessionCount: number }>;
+};
+
+function DataRetentionSection() {
+  const [status, setStatus] = useState<RetentionStatus | null>(null);
+  const [deletingYear, setDeletingYear] = useState<number | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const load = () => api.get<RetentionStatus>('/settings/data-retention').then(setStatus).catch(() => {});
+  useEffect(() => { load(); }, []);
+
+  async function deleteYear(academicYear: number, sessionCount: number) {
+    const phrase = `${academicYear}학년도 성적 삭제`;
+    const entered = prompt(
+      `${academicYear}학년도 응시 기록 ${sessionCount}건을 완전 삭제합니다.\n시험지와 학생 명단은 유지되지만 답안·점수·시간·필기·화면 이탈 기록은 복구할 수 없습니다.\n\n계속하려면 다음 문구를 입력하세요.\n${phrase}`,
+    );
+    if (entered !== phrase) return;
+    setDeletingYear(academicYear);
+    setMessage(null);
+    try {
+      const result = await api.delete<{ deletedSessions: number; status: RetentionStatus }>(
+        `/settings/data-retention/${academicYear}`,
+        { confirmation: phrase },
+      );
+      setStatus(result.status);
+      window.dispatchEvent(new Event('scorelab:data-retention-changed'));
+      setMessage(`${academicYear}학년도 학습 데이터 ${result.deletedSessions}건을 삭제했습니다.`);
+    } catch (error) {
+      setMessage(error instanceof ApiError ? error.message : '학습 데이터를 삭제하지 못했습니다.');
+    } finally {
+      setDeletingYear(null);
+    }
+  }
+
+  return (
+    <Card id="data-retention" data-testid="data-retention-section" className="mt-6 scroll-mt-6">
+      <h2 className="text-sm font-bold text-ink">학년도별 성적 데이터 관리</h2>
+      <p className="mt-1 text-xs leading-relaxed text-ink-soft">
+        학년도는 매년 3월 1일부터 다음 해 2월 말까지입니다. 삭제하면 시험지와 학생 명단은 남고,
+        응시 기록·답안·점수·소요시간·필기·화면 이탈 기록만 완전 삭제됩니다.
+      </p>
+      {!status ? (
+        <p className="mt-3 text-xs text-ink-soft">확인 중...</p>
+      ) : status.years.length === 0 ? (
+        <p className="mt-3 rounded-xl bg-good/10 px-3 py-2 text-xs font-bold text-good">저장된 성적 데이터가 없습니다.</p>
+      ) : (
+        <div className="mt-3 space-y-2">
+          {status.years.map((item) => (
+            <div key={item.academicYear} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line px-3 py-2.5">
+              <div>
+                <p className="text-sm font-bold text-ink">{item.academicYear}학년도</p>
+                <p className="text-xs text-ink-soft">
+                  응시 기록 {item.sessionCount}건
+                  {item.academicYear < status.currentAcademicYear ? ' · 이전 학년도' : ' · 현재 학년도'}
+                </p>
+              </div>
+              <Button variant="danger" disabled={deletingYear !== null} onClick={() => deleteYear(item.academicYear, item.sessionCount)}>
+                {deletingYear === item.academicYear ? '삭제 중...' : '성적 데이터 삭제'}
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="mt-3 text-[11px] leading-relaxed text-ink-soft">
+        앱 밖으로 내보낸 Excel·백업 파일, 복원용 .bak 파일과 변경 전 저장 폴더는 자동 삭제되지 않습니다.
+      </p>
+      {message && <p className="mt-2 text-xs font-bold text-accent-ink">{message}</p>}
     </Card>
   );
 }
@@ -543,6 +747,15 @@ export function SettingsPage() {
         <AiSettingsSection />
       </div>
       <div className="animate-fade-in-up" style={{ animationDelay: '120ms' }}>
+        <StorageLocationSection />
+      </div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '160ms' }}>
+        <DataRetentionSection />
+      </div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '200ms' }}>
+        <PasswordSection />
+      </div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '240ms' }}>
         <BackupSection />
       </div>
     </div>

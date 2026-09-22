@@ -112,6 +112,15 @@ export function setGeminiModelCatalog(catalog) {
   writeSettings({ geminiModelCatalog: catalog });
 }
 
+export function getStudentNetworkAddress() {
+  const value = readSettings().studentNetworkAddress;
+  return typeof value === 'string' ? value : '';
+}
+
+export function setStudentNetworkAddress(address) {
+  writeSettings({ studentNetworkAddress: address });
+}
+
 // ---- 교사 로그인(계정 하나짜리 비밀번호) ----
 // 비밀번호는 scrypt(salt+해시)로만 저장한다 - 원문은 어디에도 남기지 않는다.
 
@@ -139,11 +148,25 @@ export function verifyTeacherPassword(password) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+export function validateTeacherPassword(password) {
+  if (typeof password !== 'string' || password.length < 8) {
+    return '비밀번호는 8자 이상이어야 합니다.';
+  }
+  if (password.length > 128) {
+    return '비밀번호는 128자 이하로 입력해주세요.';
+  }
+  return null;
+}
+
 // ---- 로그인 세션(쿠키) ----
 // 서버 프로세스 재시작에도 로그인이 유지되도록, 세션 비밀키를 settings.json에 보관해두고
 // 그걸로 서명한 토큰(만료시각+HMAC)을 발급한다 - 서버가 토큰을 따로 저장/조회할 필요가 없다.
 
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12시간
+
+let initialSetupToken = hasTeacherPassword()
+  ? null
+  : (process.env.SCORELAB_SETUP_TOKEN || crypto.randomBytes(32).toString('base64url'));
 
 function getSessionSecret() {
   const existing = readEncryptedField('sessionSecret');
@@ -155,19 +178,49 @@ function getSessionSecret() {
 
 export function issueSessionToken() {
   const secret = getSessionSecret();
+  const version = Number(readSettings().sessionVersion) || 1;
   const expires = Date.now() + SESSION_TTL_MS;
-  const sig = crypto.createHmac('sha256', secret).update(String(expires)).digest('hex');
-  return `${expires}.${sig}`;
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const payload = `${version}.${expires}.${nonce}`;
+  const sig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+  return `${payload}.${sig}`;
 }
 
 export function verifySessionToken(token) {
-  if (!token || typeof token !== 'string' || !token.includes('.')) return false;
-  const [expiresStr, sig] = token.split('.');
+  if (!token || typeof token !== 'string') return false;
+  const [versionStr, expiresStr, nonce, sig] = token.split('.');
+  if (!versionStr || !expiresStr || !nonce || !sig) return false;
+  const version = Number(versionStr);
   const expires = Number(expiresStr);
+  const currentVersion = Number(readSettings().sessionVersion) || 1;
+  if (!Number.isSafeInteger(version) || version !== currentVersion) return false;
   if (!Number.isFinite(expires) || Date.now() > expires) return false;
   const secret = getSessionSecret();
-  const expected = crypto.createHmac('sha256', secret).update(String(expires)).digest('hex');
+  const expected = crypto.createHmac('sha256', secret)
+    .update(`${version}.${expires}.${nonce}`)
+    .digest('hex');
   const a = Buffer.from(sig, 'hex');
   const b = Buffer.from(expected, 'hex');
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+export function invalidateAllSessions() {
+  const currentVersion = Number(readSettings().sessionVersion) || 1;
+  writeSettings({
+    sessionVersion: currentVersion + 1,
+    sessionSecret: encryptValue(crypto.randomBytes(32).toString('hex')),
+  });
+}
+
+export function getInitialSetupToken() {
+  return initialSetupToken;
+}
+
+export function consumeInitialSetupToken(candidate) {
+  if (!initialSetupToken || typeof candidate !== 'string') return false;
+  const supplied = Buffer.from(candidate);
+  const expected = Buffer.from(initialSetupToken);
+  const valid = supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+  if (valid) initialSetupToken = null;
+  return valid;
 }

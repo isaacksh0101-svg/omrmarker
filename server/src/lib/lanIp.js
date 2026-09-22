@@ -1,4 +1,5 @@
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 // 교사 PC에 연결된 모든 네트워크 인터페이스의 IPv4 주소를 후보로 나열한다.
 // 유선+무선을 동시에 쓰거나 VPN/가상 어댑터가 함께 잡히는 PC에서는 후보가 여러 개일 수 있고,
@@ -9,17 +10,82 @@ const isPrivate192or10 = (ip) => ip.startsWith('192.168.') || ip.startsWith('10.
 export function getLanIpCandidates() {
   const interfaces = os.networkInterfaces();
   const candidates = [];
+  const profiles = getWindowsNetworkProfiles();
 
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name] || []) {
       if (iface.family !== 'IPv4' || iface.internal) continue;
-      candidates.push({ name, address: iface.address });
+      const profile = profiles.get(name);
+      candidates.push({
+        name,
+        address: iface.address,
+        netmask: iface.netmask,
+        cidr: iface.cidr,
+        profileName: profile?.profileName ?? null,
+        networkCategory: profile?.networkCategory ?? 'Unknown',
+      });
     }
   }
 
   // 흔한 사설 대역(192.168.x / 10.x)을 우선 순위로 앞에 둔다 (Hyper-V, VPN 등 가상 어댑터 배제 목적).
   candidates.sort((a, b) => Number(isPrivate192or10(b.address)) - Number(isPrivate192or10(a.address)));
   return candidates;
+}
+
+let cachedProfiles = null;
+let cachedProfilesAt = 0;
+
+function getWindowsNetworkProfiles() {
+  if (cachedProfiles && Date.now() - cachedProfilesAt < 10_000) return cachedProfiles;
+  const profiles = new Map();
+  if (process.platform !== 'win32') return profiles;
+  try {
+    const script = [
+      'Get-NetConnectionProfile',
+      '| Select-Object InterfaceAlias,Name,NetworkCategory',
+      '| ConvertTo-Json -Compress',
+    ].join(' ');
+    const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 3000,
+    }).trim();
+    if (!output) return profiles;
+    const parsed = JSON.parse(output);
+    for (const item of Array.isArray(parsed) ? parsed : [parsed]) {
+      if (!item?.InterfaceAlias) continue;
+      profiles.set(item.InterfaceAlias, {
+        profileName: String(item.Name || ''),
+        networkCategory: normalizeNetworkCategory(item.NetworkCategory),
+      });
+    }
+  } catch {
+    // 프로필 조회가 막힌 환경에서는 Unknown으로 표시하고, 교사가 다른 후보를 고르게 한다.
+  }
+  cachedProfiles = profiles;
+  cachedProfilesAt = Date.now();
+  return profiles;
+}
+
+function normalizeNetworkCategory(value) {
+  const normalized = String(value);
+  if (normalized === '0' || normalized === 'Public') return 'Public';
+  if (normalized === '1' || normalized === 'Private') return 'Private';
+  if (normalized === '2' || normalized === 'DomainAuthenticated') return 'DomainAuthenticated';
+  return 'Unknown';
+}
+
+function ipv4ToNumber(ip) {
+  const parts = String(ip).split('.').map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return null;
+  return parts.reduce((value, part) => ((value << 8) | part) >>> 0, 0);
+}
+
+export function isAddressInSubnet(address, networkAddress, netmask) {
+  const remote = ipv4ToNumber(address);
+  const network = ipv4ToNumber(networkAddress);
+  const mask = ipv4ToNumber(netmask);
+  return remote != null && network != null && mask != null && (remote & mask) === (network & mask);
 }
 
 // 교사 PC의 대표 LAN IP를 하나 고른다 (학생 크롬북이 접속할 주소). 자동 추정값이며,

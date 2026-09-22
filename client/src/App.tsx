@@ -12,24 +12,30 @@ import { RosterPage } from './pages/roster/RosterPage'
 import { StudentJoin } from './pages/student/StudentJoin'
 import { TakeExam } from './pages/student/TakeExam'
 import { TeacherLayout } from './components/TeacherLayout'
+import { LegalFooter } from './components/LegalFooter'
 
 function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<TeacherLayout><Dashboard /></TeacherLayout>} />
-        <Route path="/exams/:id" element={<TeacherLayout><ExamBuilder /></TeacherLayout>} />
-        <Route path="/exams/:id/results" element={<TeacherLayout><ExamResults /></TeacherLayout>} />
-        <Route path="/exams/:id/sessions/:sessionId" element={<TeacherLayout><SessionReview /></TeacherLayout>} />
-        <Route path="/roster" element={<TeacherLayout><RosterPage /></TeacherLayout>} />
-        <Route path="/exam-monitor" element={<TeacherLayout><ExamMonitorPicker /></TeacherLayout>} />
-        <Route path="/exam-monitor/:id" element={<TeacherLayout><ExamMonitor /></TeacherLayout>} />
-        <Route path="/standards-report" element={<TeacherLayout><StandardsReport /></TeacherLayout>} />
-        <Route path="/exam-reports" element={<TeacherLayout><ExamReportPicker /></TeacherLayout>} />
-        <Route path="/settings" element={<TeacherLayout><SettingsPage /></TeacherLayout>} />
-        <Route path="/student" element={<StudentJoin />} />
-        <Route path="/student/exam/:examId" element={<TakeExam />} />
-      </Routes>
+      <div className="flex min-h-screen flex-col">
+        <div className="min-h-0 flex-1">
+          <Routes>
+            <Route path="/" element={<TeacherLayout><Dashboard /></TeacherLayout>} />
+            <Route path="/exams/:id" element={<TeacherLayout><ExamBuilder /></TeacherLayout>} />
+            <Route path="/exams/:id/results" element={<TeacherLayout><ExamResults /></TeacherLayout>} />
+            <Route path="/exams/:id/sessions/:sessionId" element={<TeacherLayout><SessionReview /></TeacherLayout>} />
+            <Route path="/roster" element={<TeacherLayout><RosterPage /></TeacherLayout>} />
+            <Route path="/exam-monitor" element={<TeacherLayout><ExamMonitorPicker /></TeacherLayout>} />
+            <Route path="/exam-monitor/:id" element={<TeacherLayout><ExamMonitor /></TeacherLayout>} />
+            <Route path="/standards-report" element={<TeacherLayout><StandardsReport /></TeacherLayout>} />
+            <Route path="/exam-reports" element={<TeacherLayout><ExamReportPicker /></TeacherLayout>} />
+            <Route path="/settings" element={<TeacherLayout><SettingsPage /></TeacherLayout>} />
+            <Route path="/student" element={<StudentJoin />} />
+            <Route path="/student/exam/:examId" element={<TakeExam />} />
+          </Routes>
+        </div>
+        <LegalFooter />
+      </div>
     </BrowserRouter>
   )
 }

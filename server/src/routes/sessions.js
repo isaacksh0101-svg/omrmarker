@@ -66,6 +66,13 @@ sessionsRouter.post('/:id/sessions', async (req, res) => {
 
   let session = await repo.getSessionByExamAndRoll(examId, rollNumber);
 
+  if (session && (session.status === 'submitted' || session.status === 'force_submitted')) {
+    return res.status(409).json({ error: '이미 종료된 응시 기록입니다. 다시 응시하려면 선생님께 요청해주세요.' });
+  }
+  if (exam.admission_closed && (!session || !session.allow_rejoin)) {
+    return res.status(403).json({ error: '선생님이 입장을 마감했습니다. 감독 화면에서 확인을 요청해주세요.' });
+  }
+
   // 같은 번호로 이미 참여/응시 중인 세션이 있는데 또 참여하려는 경우 - 다른 기기가
   // 끼어들면 답 제출/이탈 경고가 뒤섞이므로 기본적으로 막는다. 원래 기기가 고장나서
   // 다른 기기로 이어가야 하는 등 정당한 상황엔 교사가 "실시간 감독"에서 재참여를 허용해줘야
@@ -454,6 +461,7 @@ sessionsRouter.get('/:id/monitor', requireAuth, async (req, res) => {
       time_limit_sec: exam.time_limit_sec,
       started_at: exam.started_at,
       ends_at: exam.ends_at,
+      admission_closed: Boolean(exam.admission_closed),
     },
     students,
   });

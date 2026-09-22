@@ -33,7 +33,8 @@ export const api = {
     request<T>(path, { method: 'POST', body: data ? JSON.stringify(data) : undefined }),
   put: <T>(path: string, data?: unknown) =>
     request<T>(path, { method: 'PUT', body: data ? JSON.stringify(data) : undefined }),
-  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  delete: <T>(path: string, data?: unknown) =>
+    request<T>(path, { method: 'DELETE', body: data ? JSON.stringify(data) : undefined }),
   // FormData는 브라우저가 boundary를 포함한 Content-Type을 알아서 설정해야 하므로
   // 기본 request()의 'application/json' 헤더를 강제하지 않는 별도 경로를 쓴다.
   postForm: async <T>(path: string, formData: FormData) => {

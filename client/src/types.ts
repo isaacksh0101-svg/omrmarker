@@ -231,6 +231,7 @@ export interface ExamMonitorData {
     time_limit_sec: number;
     started_at: string | null;
     ends_at: string | null;
+    admission_closed: boolean;
   };
   students: MonitorStudent[];
 }
@@ -285,6 +286,10 @@ export interface StudentExamSummary {
 export interface LanIpCandidate {
   name: string;
   address: string;
+  netmask: string;
+  cidr: string | null;
+  profileName: string | null;
+  networkCategory: 'Public' | 'Private' | 'DomainAuthenticated' | 'Unknown';
 }
 
 export interface LanInfo {
@@ -294,4 +299,6 @@ export interface LanInfo {
   servingClient: boolean;
   candidates: LanIpCandidate[];
   selectedIp: string;
+  selected: LanIpCandidate | null;
+  accessReady: boolean;
 }
