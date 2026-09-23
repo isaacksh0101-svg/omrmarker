@@ -24,7 +24,7 @@ export function DataRetentionBanner() {
         <p className="font-bold">
           이전 학년도 학습 데이터 {status.previousSessionCount}건이 남아 있습니다. 학교의 보유 기준을 확인해주세요.
         </p>
-        <Link to="/settings#data-retention" className="shrink-0 font-extrabold underline">
+        <Link to="/data-management#data-retention" className="shrink-0 font-extrabold underline">
           확인 및 삭제
         </Link>
       </div>

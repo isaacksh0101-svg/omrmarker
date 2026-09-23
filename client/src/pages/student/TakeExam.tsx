@@ -371,6 +371,12 @@ export function TakeExam() {
         <p className="mt-3 text-base text-ink-soft">
           제한시간 {Math.round(exam.time_limit_sec / 60)}분 · 총 {exam.question_count}문항
         </p>
+        <div className="mt-8 w-full max-w-xs rounded-3xl border-2 border-accent/25 bg-accent-soft px-6 py-6 shadow-sm">
+          <p className="text-sm font-bold text-accent-ink">내 출석번호</p>
+          <p className="mt-1 text-7xl font-black tracking-tight text-accent-ink">
+            {session.roll_number}<span className="ml-1 text-3xl">번</span>
+          </p>
+        </div>
         <div className="mt-8 flex items-center gap-2">
           <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
           <p className="text-base font-bold text-ink-soft">선생님이 시험을 시작하면 자동으로 시작됩니다</p>

@@ -13,6 +13,32 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 const stagingApp = path.join(__dirname, '.staging', 'app');
+const stagingRuntime = path.join(__dirname, '.staging', 'runtime');
+
+function toUnicodeRtf(text) {
+  let body = '';
+  for (const char of text.replace(/\r\n/g, '\n')) {
+    if (char === '\n') {
+      body += '\\par\n';
+      continue;
+    }
+    if (char === '\\' || char === '{' || char === '}') {
+      body += `\\${char}`;
+      continue;
+    }
+    const codePoint = char.codePointAt(0);
+    if (codePoint >= 32 && codePoint <= 126) {
+      body += char;
+      continue;
+    }
+    for (const unit of char) {
+      const code = unit.charCodeAt(0);
+      body += `\\u${code > 32767 ? code - 65536 : code}?`;
+    }
+  }
+  return `{\\rtf1\\ansi\\ansicpg949\\deff0{\\fonttbl{\\f0\\fnil\\fcharset129 Malgun Gothic;}}`
+    + `\\viewkind4\\uc1\\pard\\lang1042\\f0\\fs20 ${body}}`;
+}
 
 function run(cmd, cwd) {
   console.log(`$ ${cmd}  (in ${path.relative(repoRoot, cwd) || '.'})`);
@@ -22,6 +48,9 @@ function run(cmd, cwd) {
 console.log('[1/4] 이전 스테이징 폴더 정리...');
 fs.rmSync(path.join(__dirname, '.staging'), { recursive: true, force: true });
 fs.mkdirSync(stagingApp, { recursive: true });
+fs.mkdirSync(stagingRuntime, { recursive: true });
+const licenseText = fs.readFileSync(path.join(repoRoot, 'LICENSE.md'), 'utf8');
+fs.writeFileSync(path.join(__dirname, '.staging', 'license-ko.rtf'), toUnicodeRtf(licenseText), 'ascii');
 
 console.log('[2/4] 클라이언트 빌드...');
 run('npm run build', path.join(repoRoot, 'client'));
@@ -60,5 +89,15 @@ fs.cpSync(path.join(repoRoot, 'curriculum'), path.join(stagingApp, 'curriculum')
   recursive: true,
   filter: excludeDotfilesAndDirs(),
 });
+
+// 설치 대상 PC에 Node.js를 따로 요구하지 않도록, 빌드에 사용한 공식 Node 실행 파일을
+// 애플리케이션 전용 런타임으로 함께 넣는다. 서버는 이 파일만 자식 프로세스로 실행한다.
+const runtimeName = process.platform === 'win32' ? 'node.exe' : 'node';
+fs.copyFileSync(process.execPath, path.join(stagingRuntime, runtimeName));
+fs.writeFileSync(
+  path.join(stagingRuntime, 'RUNTIME-VERSION.txt'),
+  `Node.js ${process.version}\nplatform=${process.platform}\narch=${process.arch}\n`,
+  'utf8',
+);
 
 console.log('완료: electron/.staging/app 준비됨.');

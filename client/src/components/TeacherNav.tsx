@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { api } from '../api/client';
-import { IconChart, IconDashboard, IconDocument, IconMonitor, IconSettings, IconUsers } from './icons';
+import { IconBackup, IconChart, IconDashboard, IconDocument, IconMonitor, IconSettings, IconUsers } from './icons';
 
 const NAV_ITEMS = [
   { to: '/', label: '시험지 만들기', icon: IconDashboard, end: true },
@@ -11,6 +11,7 @@ const NAV_ITEMS = [
 ];
 
 const SETTINGS_ITEM = { to: '/settings', label: '환경설정', icon: IconSettings, end: false };
+const DATA_ITEM = { to: '/data-management', label: '데이터 관리', icon: IconBackup, end: false };
 
 function navLinkClass(isActive: boolean) {
   return `group relative flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-bold transition-all duration-200 ${
@@ -77,6 +78,22 @@ export function TeacherNav() {
                 <SETTINGS_ITEM.icon className="h-[18px] w-[18px]" />
               </span>
               <span>{SETTINGS_ITEM.label}</span>
+              {isActive && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-[#08b9e8]" />}
+            </>
+          )}
+        </NavLink>
+
+        <NavLink
+          to={DATA_ITEM.to}
+          end={DATA_ITEM.end}
+          className={({ isActive }) => navLinkClass(isActive)}
+        >
+          {({ isActive }) => (
+            <>
+              <span className={navIconClass(isActive)}>
+                <DATA_ITEM.icon className="h-[18px] w-[18px]" />
+              </span>
+              <span>{DATA_ITEM.label}</span>
               {isActive && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-[#08b9e8]" />}
             </>
           )}

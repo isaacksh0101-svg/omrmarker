@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/client';
-import type { RosterEntry, StandardAccuracy, StudentExamSummary } from '../../types';
+import type { RosterEntry, StandardAccuracy, StandardsTrendPoint, StudentExamSummary } from '../../types';
 import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
 import { AccuracyRow } from '../../components/AccuracyRow';
 import { CompareBar } from '../../components/CompareBar';
 import { TimeUnitBars } from '../../components/TimeUnitBars';
+import { TrendChart, type TrendChartPoint } from '../../components/TrendChart';
 import { StatCard, StatCardRow } from '../../components/StatCard';
 import { PageHeader } from '../../components/PageHeader';
 import { IconChart } from '../../components/icons';
@@ -51,6 +52,10 @@ export function StandardsReport() {
   const [sortLowFirst, setSortLowFirst] = useState(false);
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
   const [studentExams, setStudentExams] = useState<StudentExamSummary[]>([]);
+  // 정답률 추이 차트 - 기본은 과목 전체 평균, trendCode를 고르면 그 성취기준 하나로 좁힌다.
+  const [trendCode, setTrendCode] = useState<string>('');
+  const [classTrend, setClassTrend] = useState<StandardsTrendPoint[]>([]);
+  const [myTrend, setMyTrend] = useState<StandardsTrendPoint[]>([]);
 
   useEffect(() => {
     api.get<RosterEntry[]>('/roster').then(setRoster);
@@ -85,6 +90,35 @@ export function StandardsReport() {
     }
   }, [rollNumber, from, to]);
 
+  // 과목을 바꾸면 이전 과목의 성취기준 코드가 더 이상 의미 없으므로 드릴다운을 초기화한다.
+  useEffect(() => {
+    setTrendCode('');
+  }, [subjectFilter]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (subjectFilter !== 'all') {
+      // subjectFilter는 화면에 보이는 subject_name("사회")이지 exams.subject_id("SO" 같은
+      // 코드)가 아니다 - 서버는 실제 subject_id로 필터링하므로 여기서 변환해줘야 한다.
+      const source = rollNumber ? classData : data;
+      const subjectId = source.find((s) => s.subject_name === subjectFilter)?.subject_id;
+      if (subjectId) params.set('subject_id', subjectId);
+    }
+    if (trendCode) params.set('code', trendCode);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    api.get<StandardsTrendPoint[]>(`/standards/trend${query}`).then(setClassTrend);
+
+    if (rollNumber) {
+      const mineParams = new URLSearchParams(params);
+      mineParams.set('roll_number', rollNumber);
+      api.get<StandardsTrendPoint[]>(`/standards/trend?${mineParams.toString()}`).then(setMyTrend);
+    } else {
+      setMyTrend([]);
+    }
+  }, [subjectFilter, trendCode, rollNumber, from, to, data, classData]);
+
   const comparing = rollNumber !== '';
 
   // 드롭다운에는 실제로 데이터가 있는 과목만 보여준다. 비교 모드에서는 학급 전체 기준
@@ -95,6 +129,53 @@ export function StandardsReport() {
   }, [comparing, classData, data]);
 
   const filteredData = subjectFilter === 'all' ? data : data.filter((s) => s.subject_name === subjectFilter);
+
+  // 추이 차트의 "성취기준으로 좁혀보기" 드롭다운 옵션 - 지금 필터에 걸리는 성취기준만 보여준다.
+  const trendStandardOptions = useMemo(() => {
+    const source = comparing ? classData : data;
+    const byCode = new Map<string, StandardAccuracy>();
+    for (const s of source) {
+      if (subjectFilter !== 'all' && s.subject_name !== subjectFilter) continue;
+      byCode.set(s.code, s);
+    }
+    return [...byCode.values()].sort((a, b) => a.code.localeCompare(b.code));
+  }, [comparing, classData, data, subjectFilter]);
+
+  // 반 평균(classTrend)과 내 추이(myTrend)를 exam_id 기준으로 합쳐 차트 한 줄씩 만든다.
+  const chartPoints: TrendChartPoint[] = useMemo(() => {
+    const byExam = new Map<number, TrendChartPoint>();
+    for (const p of classTrend) {
+      byExam.set(p.exam_id, {
+        key: String(p.exam_id),
+        date: p.date,
+        title: p.title,
+        classAcc: p.accuracy,
+        classAttempted: p.attempted_count,
+        mineAcc: null,
+        mineAttempted: 0,
+      });
+    }
+    for (const p of myTrend) {
+      const existing = byExam.get(p.exam_id);
+      if (existing) {
+        existing.mineAcc = p.accuracy;
+        existing.mineAttempted = p.attempted_count;
+      } else {
+        // 이론상 학생이 응시한 시험은 항상 classTrend에도 잡혀야 하지만(같은 조건으로
+        // 조회하므로), 혹시 어긋나는 경우를 대비해 내 수치로라도 점을 만들어 둔다.
+        byExam.set(p.exam_id, {
+          key: String(p.exam_id),
+          date: p.date,
+          title: p.title,
+          classAcc: p.accuracy,
+          classAttempted: p.attempted_count,
+          mineAcc: p.accuracy,
+          mineAttempted: p.attempted_count,
+        });
+      }
+    }
+    return [...byExam.values()].sort((a, b) => a.date.localeCompare(b.date) || a.key.localeCompare(b.key));
+  }, [classTrend, myTrend]);
 
   const compareItems: CompareItem[] = useMemo(() => {
     if (!comparing) return [];
@@ -291,6 +372,35 @@ export function StandardsReport() {
           </div>
         </Card>
       )}
+
+      <Card className="animate-fade-in-up mt-4" style={{ animationDelay: '60ms' }}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-bold text-ink">정답률 변화 추이</h2>
+          {trendStandardOptions.length > 0 && (
+            <select
+              value={trendCode}
+              onChange={(e) => setTrendCode(e.target.value)}
+              className="max-w-[60%] rounded-lg border border-line bg-panel px-2 py-1.5 text-xs text-ink outline-none focus:border-accent"
+            >
+              <option value="">
+                {subjectFilter === 'all' ? '전체 평균' : `${displaySubjectName(subjectFilter)} 전체 평균`}
+              </option>
+              {trendStandardOptions.map((s) => (
+                <option key={s.code} value={s.code}>
+                  [{s.code}] {s.statement}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+        {chartPoints.length < 2 ? (
+          <p className="mt-3 text-xs text-ink-soft">
+            추이를 보려면 같은 조건에 해당하는 시험 결과가 2개 이상 있어야 합니다.
+          </p>
+        ) : (
+          <TrendChart points={chartPoints} showMine={comparing} />
+        )}
+      </Card>
 
       {comparing ? (
         groupedCompare.length === 0 ? (

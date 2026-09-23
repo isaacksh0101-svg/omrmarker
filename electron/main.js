@@ -23,7 +23,6 @@ const path = require('node:path');
 
 const PORT = 4000;
 const HEALTH_URL = `http://localhost:${PORT}/api/health`;
-const NODE_DOWNLOAD_URL = 'https://nodejs.org/';
 
 let serverProcess = null;
 let mainWindow = null;
@@ -84,27 +83,9 @@ async function selectInitialDataDir() {
     return previousDefault;
   }
 
-  const choice = dialog.showMessageBoxSync({
-    type: 'question',
-    title: 'ScoreLab 데이터 저장 위치',
-    message: '시험지와 학생 학습 데이터를 저장할 위치를 선택해주세요.',
-    detail: '선택한 폴더 안에 ScoreLab 전용 폴더가 만들어집니다. 학교에서 관리하는 저장장치를 권장합니다.',
-    buttons: ['저장 폴더 선택', '기본 위치 사용'],
-    defaultId: 0,
-    cancelId: 1,
-  });
-
-  let dataDir = defaultDataDir();
-  if (choice === 0) {
-    const selected = await dialog.showOpenDialog({
-      title: 'ScoreLab 데이터를 저장할 상위 폴더 선택',
-      defaultPath: app.getPath('documents'),
-      properties: ['openDirectory', 'createDirectory'],
-    });
-    if (!selected.canceled && selected.filePaths[0]) {
-      dataDir = path.join(selected.filePaths[0], 'ScoreLab');
-    }
-  }
+  // 서버가 먼저 데이터 폴더를 필요로 하므로 최초에는 안전한 사용자 전용 기본 위치로 시작한다.
+  // 창이 열린 뒤 초기 설정 안내에서 사용자가 위치를 확인하거나 변경할 수 있다.
+  const dataDir = defaultDataDir();
   fs.mkdirSync(dataDir, { recursive: true });
   saveConfiguredDataDir(dataDir);
   return dataDir;
@@ -133,8 +114,17 @@ function serverEntryPath() {
     : path.join(__dirname, '..', 'server', 'src', 'index.js');
 }
 
+function nodeExecutablePath() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node')
+    : 'node';
+}
+
 function checkNodeAvailable() {
-  const result = spawnSync('node', ['--version'], { shell: process.platform === 'win32' });
+  const result = spawnSync(nodeExecutablePath(), ['--version'], {
+    shell: false,
+    windowsHide: true,
+  });
   return result.status === 0;
 }
 
@@ -142,7 +132,7 @@ function startServer() {
   const entry = serverEntryPath();
   stoppingServer = false;
   recentServerOutput = [];
-  serverProcess = spawn('node', [entry], {
+  serverProcess = spawn(nodeExecutablePath(), [entry], {
     cwd: path.dirname(entry),
     env: {
       ...process.env,
@@ -154,7 +144,7 @@ function startServer() {
       SCORELAB_SETUP_TOKEN: setupToken,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
-    shell: process.platform === 'win32',
+    shell: false,
     windowsHide: true,
   });
 
@@ -323,16 +313,13 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     if (!checkNodeAvailable()) {
-      const choice = dialog.showMessageBoxSync({
+      dialog.showMessageBoxSync({
         type: 'error',
-        title: 'Node.js가 필요합니다',
-        message: 'ScoreLab을 실행하려면 Node.js 22 이상이 설치되어 있어야 합니다.',
-        detail: '아래 버튼으로 다운로드 페이지를 열 수 있습니다. 설치 후 ScoreLab을 다시 실행해주세요.',
-        buttons: ['Node.js 다운로드 페이지 열기', '닫기'],
-        defaultId: 0,
-        cancelId: 1,
+        title: 'ScoreLab 실행 구성요소 오류',
+        message: 'ScoreLab에 포함된 서버 실행 구성요소를 찾거나 실행할 수 없습니다.',
+        detail: '설치 파일이 손상되었을 수 있습니다. GitHub Releases에서 같은 버전의 설치 파일을 다시 내려받아 설치해주세요.',
+        buttons: ['닫기'],
       });
-      if (choice === 0) shell.openExternal(NODE_DOWNLOAD_URL);
       app.quit();
       return;
     }

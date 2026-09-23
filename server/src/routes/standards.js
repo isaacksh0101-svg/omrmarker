@@ -19,6 +19,14 @@ standardsRouter.get('/report', async (req, res) => {
   res.json(await repo.computeStandardsAccuracy({ rollNumber, from, to }));
 });
 
+// 시험(응시)별 정답률 추이. subject_id로 교과 전체 평균을, code까지 주면 그 성취기준
+// 하나로 좁힌 추이를 낸다. roll_number를 주면 그 학생만의 추이.
+standardsRouter.get('/trend', async (req, res) => {
+  const rollNumber = req.query.roll_number ? Number(req.query.roll_number) : undefined;
+  const { subject_id: subjectId, code, from, to } = req.query;
+  res.json(await repo.computeStandardsTrend({ subjectId, code, rollNumber, from, to }));
+});
+
 standardsRouter.get('/', (req, res) => {
   const { subject_id, grade_cluster } = req.query;
   res.json(filterStandards({ subject_id, grade_cluster }));

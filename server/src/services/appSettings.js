@@ -121,6 +121,20 @@ export function setStudentNetworkAddress(address) {
   writeSettings({ studentNetworkAddress: address });
 }
 
+export function getOnboardingStatus() {
+  const settings = readSettings();
+  // 이 필드가 없는 설치는 초기 설정 기능 도입 전부터 사용하던 기존 설치로 본다.
+  return { completed: settings.onboardingCompleted !== false };
+}
+
+export function completeOnboarding() {
+  writeSettings({ onboardingCompleted: true, onboardingCompletedAt: new Date().toISOString() });
+}
+
+export function resetOnboarding() {
+  writeSettings({ onboardingCompleted: false, onboardingCompletedAt: null });
+}
+
 // ---- 교사 로그인(계정 하나짜리 비밀번호) ----
 // 비밀번호는 scrypt(salt+해시)로만 저장한다 - 원문은 어디에도 남기지 않는다.
 
@@ -133,9 +147,13 @@ export function hasTeacherPassword() {
 }
 
 export function setTeacherPassword(password) {
+  const firstSetup = !hasTeacherPassword();
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = scryptHash(password, salt);
-  writeSettings({ teacherPasswordHash: `${salt}:${hash}` });
+  writeSettings({
+    teacherPasswordHash: `${salt}:${hash}`,
+    ...(firstSetup ? { onboardingCompleted: false } : {}),
+  });
 }
 
 export function verifyTeacherPassword(password) {

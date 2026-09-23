@@ -4,7 +4,35 @@ import type { LanInfo, LanIpCandidate } from '../../types';
 import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
 import { PageHeader } from '../../components/PageHeader';
-import { IconSettings } from '../../components/icons';
+import { IconBackup, IconSettings } from '../../components/icons';
+
+function OnboardingSection() {
+  const [busy, setBusy] = useState(false);
+
+  async function reopenOnboarding() {
+    setBusy(true);
+    try {
+      await api.post('/settings/onboarding/reset');
+      window.location.assign('/');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="mt-6">
+      <h2 className="text-sm font-bold text-ink">초기 설정 안내</h2>
+      <p className="mt-1 text-xs leading-relaxed text-ink-soft">
+        데이터 저장 위치와 Gemini API 설정 안내를 다시 확인할 수 있습니다. 기존 데이터와 설정은 삭제되지 않습니다.
+      </p>
+      <div className="mt-3">
+        <Button variant="secondary" disabled={busy} onClick={reopenOnboarding}>
+          {busy ? '여는 중...' : '초기 설정 다시 열기'}
+        </Button>
+      </div>
+    </Card>
+  );
+}
 
 function PasswordSection() {
   const [password, setPassword] = useState('');
@@ -407,6 +435,7 @@ const BACKUP_CATEGORIES: Array<{
 function BackupSection() {
   const importInputRef = useRef<HTMLInputElement>(null);
   const [category, setCategory] = useState<BackupCategory>('all');
+  const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importDone, setImportDone] = useState(false);
@@ -422,7 +451,15 @@ function BackupSection() {
   async function exportBackup() {
     const today = new Date().toISOString().slice(0, 10);
     const query = category === 'all' ? '' : `?category=${category}`;
-    await api.downloadFile(`/backup/export${query}`, `omr-backup${current.fileSuffix}-${today}.sqlite3`);
+    setImportError(null);
+    setExporting(true);
+    try {
+      await api.downloadFile(`/backup/export${query}`, `omr-backup${current.fileSuffix}-${today}.sqlite3`);
+    } catch (err) {
+      setImportError(err instanceof ApiError ? err.message : '백업 파일을 만들지 못했습니다.');
+    } finally {
+      setExporting(false);
+    }
   }
 
   async function importBackup(e: React.ChangeEvent<HTMLInputElement>) {
@@ -479,10 +516,10 @@ function BackupSection() {
         </p>
       ) : (
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button variant="secondary" onClick={exportBackup}>
-            백업 파일 다운로드
+          <Button variant="secondary" disabled={exporting || importing} onClick={exportBackup}>
+            {exporting ? '백업 파일 만드는 중...' : '백업 파일 다운로드'}
           </Button>
-          <Button variant="secondary" disabled={importing} onClick={() => importInputRef.current?.click()}>
+          <Button variant="secondary" disabled={exporting || importing} onClick={() => importInputRef.current?.click()}>
             {importing ? '가져오는 중...' : '백업 파일 가져오기'}
           </Button>
           <input
@@ -744,18 +781,29 @@ export function SettingsPage() {
         <StudentAccessSection />
       </div>
       <div className="animate-fade-in-up" style={{ animationDelay: '80ms' }}>
+        <OnboardingSection />
+      </div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '100ms' }}>
         <AiSettingsSection />
       </div>
       <div className="animate-fade-in-up" style={{ animationDelay: '120ms' }}>
-        <StorageLocationSection />
-      </div>
-      <div className="animate-fade-in-up" style={{ animationDelay: '160ms' }}>
-        <DataRetentionSection />
-      </div>
-      <div className="animate-fade-in-up" style={{ animationDelay: '200ms' }}>
         <PasswordSection />
       </div>
-      <div className="animate-fade-in-up" style={{ animationDelay: '240ms' }}>
+    </div>
+  );
+}
+
+export function DataManagementPage() {
+  return (
+    <div className="mx-auto max-w-2xl px-6 py-12">
+      <PageHeader icon={IconBackup} title="데이터 관리" />
+      <div className="animate-fade-in-up mt-1" style={{ animationDelay: '40ms' }}>
+        <StorageLocationSection />
+      </div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '80ms' }}>
+        <DataRetentionSection />
+      </div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '120ms' }}>
         <BackupSection />
       </div>
     </div>

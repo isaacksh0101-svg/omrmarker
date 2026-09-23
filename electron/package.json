@@ -1,7 +1,7 @@
 {
   "name": "scorelab-desktop",
   "private": true,
-  "version": "2.0.1",
+  "version": "2.3.0",
   "description": "ScoreLab을 설치형 데스크톱 앱(.exe)으로 감싸는 Electron 셸 - server/client 코드는 그대로 두고 실행 방식만 추가한다.",
   "main": "main.js",
   "scripts": {
@@ -28,10 +28,15 @@
       {
         "from": ".staging/app",
         "to": "app"
+      },
+      {
+        "from": ".staging/runtime",
+        "to": "runtime"
       }
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "artifactName": "ScoreLab-Setup-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -39,7 +44,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "ScoreLab"
+      "shortcutName": "ScoreLab",
+      "license": ".staging/license-ko.rtf",
+      "deleteAppDataOnUninstall": false
     }
   },
   "allowScripts": {

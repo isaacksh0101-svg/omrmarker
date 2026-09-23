@@ -7,7 +7,7 @@ import { ExamReportPicker } from './pages/teacher/ExamReportPicker'
 import { ExamMonitorPicker } from './pages/teacher/ExamMonitorPicker'
 import { ExamMonitor } from './pages/teacher/ExamMonitor'
 import { StandardsReport } from './pages/teacher/StandardsReport'
-import { SettingsPage } from './pages/teacher/SettingsPage'
+import { DataManagementPage, SettingsPage } from './pages/teacher/SettingsPage'
 import { RosterPage } from './pages/roster/RosterPage'
 import { StudentJoin } from './pages/student/StudentJoin'
 import { TakeExam } from './pages/student/TakeExam'
@@ -30,6 +30,7 @@ function App() {
             <Route path="/standards-report" element={<TeacherLayout><StandardsReport /></TeacherLayout>} />
             <Route path="/exam-reports" element={<TeacherLayout><ExamReportPicker /></TeacherLayout>} />
             <Route path="/settings" element={<TeacherLayout><SettingsPage /></TeacherLayout>} />
+            <Route path="/data-management" element={<TeacherLayout><DataManagementPage /></TeacherLayout>} />
             <Route path="/student" element={<StudentJoin />} />
             <Route path="/student/exam/:examId" element={<TakeExam />} />
           </Routes>

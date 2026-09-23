@@ -813,3 +813,62 @@ export async function computeStandardsAccuracy({ examId, rollNumber, from, to } 
     })
     .filter(Boolean);
 }
+
+// 시험(응시) 단위로 정답률 추이를 낸다. code가 없으면 해당 교과(subjectId)의 모든 문항을
+// 대상으로 한 전체 평균("이 과목 전체 성적이 어떻게 변해왔는지")이고, code가 있으면
+// question_standards로 좁혀 그 성취기준 하나만의 추이("이 성취기준만 따로 보면")가 된다.
+export async function computeStandardsTrend({ subjectId, code, rollNumber, from, to } = {}) {
+  const conditions = ["es.status = 'submitted'", 'a.answered_at IS NOT NULL'];
+  const params = [];
+  let standardJoin = '';
+  if (code) {
+    standardJoin = 'JOIN question_standards qs ON qs.question_id = q.id';
+    conditions.push('qs.standard_code = ?');
+    params.push(code);
+  }
+  if (subjectId) {
+    conditions.push('e.subject_id = ?');
+    params.push(subjectId);
+  }
+  if (rollNumber) {
+    conditions.push('es.roll_number = ?');
+    params.push(rollNumber);
+  }
+  if (from) {
+    conditions.push('date(es.submitted_at) >= date(?)');
+    params.push(from);
+  }
+  if (to) {
+    conditions.push('date(es.submitted_at) <= date(?)');
+    params.push(to);
+  }
+
+  const rows = await db
+    .prepare(
+      `SELECT e.id AS exam_id,
+              e.title AS title,
+              MIN(date(es.submitted_at)) AS date,
+              COUNT(*) AS attempted_count,
+              COALESCE(SUM(a.is_correct), 0) AS correct_count,
+              AVG(a.time_spent_ms) AS avg_time_spent_ms
+       FROM answers a
+       JOIN questions q ON q.id = a.question_id
+       JOIN exams e ON e.id = q.exam_id
+       JOIN exam_sessions es ON es.id = a.session_id
+       ${standardJoin}
+       WHERE ${conditions.join(' AND ')}
+       GROUP BY e.id
+       ORDER BY date ASC, e.id ASC`,
+    )
+    .all(...params);
+
+  return rows.map((r) => ({
+    exam_id: r.exam_id,
+    title: r.title,
+    date: r.date,
+    attempted_count: r.attempted_count,
+    correct_count: r.correct_count,
+    accuracy: r.attempted_count > 0 ? r.correct_count / r.attempted_count : 0,
+    avg_time_spent_ms: r.avg_time_spent_ms ?? null,
+  }));
+}

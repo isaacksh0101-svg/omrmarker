@@ -39,6 +39,23 @@ function quoteLiteral(value) {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+function tableColumns(database, schema, table) {
+  return database.prepare(`PRAGMA ${schema}.table_info(${table})`).all().map((column) => column.name);
+}
+
+// 오래된 설치본은 ALTER TABLE로 새 컬럼을 뒤에 붙이므로, 같은 테이블이라도 새로 만든
+// 백업 DB와 물리적인 컬럼 순서가 다를 수 있다. SELECT *로 복사하면 값이 엉뚱한 컬럼에
+// 들어가거나 CHECK 제약조건에 걸리므로 반드시 컬럼 이름을 명시해 복사한다.
+function copyMatchingColumns(database, sourceSchema, targetSchema, table) {
+  const sourceColumns = new Set(tableColumns(database, sourceSchema, table));
+  const columns = tableColumns(database, targetSchema, table).filter((column) => sourceColumns.has(column));
+  if (columns.length === 0) throw new Error(`${table} 테이블에 복사할 수 있는 컬럼이 없습니다.`);
+  const columnList = columns.map((column) => `"${column}"`).join(', ');
+  database.exec(
+    `INSERT INTO ${targetSchema}."${table}" (${columnList}) SELECT ${columnList} FROM ${sourceSchema}."${table}"`,
+  );
+}
+
 // 전체 스키마를 가진 빈 파일을 destPath에 만든 뒤, sourceDbPath에서 해당 카테고리 테이블의
 // 데이터만 복사해 넣는다(다른 테이블은 스키마만 있고 비어 있음). 순수 함수로 빼서
 // Express req/res 없이도 (테스트 등에서) 그대로 호출할 수 있게 한다.
@@ -49,7 +66,7 @@ export function buildCategoryExportFile(sourceDbPath, category, destPath) {
     tmpDb.exec('PRAGMA foreign_keys = OFF');
     tmpDb.exec(`ATTACH DATABASE ${quoteLiteral(sourceDbPath)} AS src`);
     for (const table of CATEGORY_TABLES[category]) {
-      tmpDb.exec(`INSERT INTO main.${table} SELECT * FROM src.${table}`);
+      copyMatchingColumns(tmpDb, 'src', 'main', table);
     }
     tmpDb.exec('DETACH DATABASE src');
     // 카테고리 표시: 파일 내용만으론(항상 전체 스키마를 들고 있어서) 어떤 카테고리인지
@@ -183,16 +200,18 @@ export function applyCategoryImport(targetDb, category, filePath) {
       targetDb.exec('DELETE FROM warning_events');
       targetDb.exec('DELETE FROM answers');
       targetDb.exec('DELETE FROM exam_sessions');
-      targetDb.exec('INSERT INTO exam_sessions SELECT * FROM src.exam_sessions');
-      targetDb.exec('INSERT INTO answers SELECT * FROM src.answers');
-      targetDb.exec('INSERT INTO warning_events SELECT * FROM src.warning_events');
+      copyMatchingColumns(targetDb, 'src', 'main', 'exam_sessions');
+      copyMatchingColumns(targetDb, 'src', 'main', 'answers');
+      copyMatchingColumns(targetDb, 'src', 'main', 'warning_events');
     } else if (category === 'exams') {
       const examIdMap = new Map();
       const questionIdMap = new Map();
 
       const insertExam = targetDb.prepare(
-        `INSERT INTO exams (title, subject_id, grade_cluster, time_limit_sec, mode, status, started_at, ends_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO exams
+           (title, subject_id, grade_cluster, time_limit_sec, mode, status, archived_from_status, memo,
+            started_at, ends_at, admission_closed, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       for (const e of targetDb.prepare('SELECT * FROM src.exams').all()) {
         const result = insertExam.run(
@@ -202,8 +221,11 @@ export function applyCategoryImport(targetDb, category, filePath) {
           e.time_limit_sec,
           e.mode,
           e.status,
+          e.archived_from_status,
+          e.memo,
           e.started_at,
           e.ends_at,
+          e.admission_closed,
           e.created_at,
           e.updated_at,
         );
@@ -211,8 +233,10 @@ export function applyCategoryImport(targetDb, category, filePath) {
       }
 
       const insertQuestion = targetDb.prepare(
-        `INSERT INTO questions (exam_id, order_index, type, prompt, points, correct_short_answers, ai_suggested, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO questions
+           (exam_id, order_index, type, prompt, prompt_image_path, points, correct_short_answers,
+            ai_suggested, ai_standard_candidates, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       for (const q of targetDb.prepare('SELECT * FROM src.questions').all()) {
         const newExamId = examIdMap.get(q.exam_id);
@@ -222,9 +246,11 @@ export function applyCategoryImport(targetDb, category, filePath) {
           q.order_index,
           q.type,
           q.prompt,
+          q.prompt_image_path,
           q.points,
           q.correct_short_answers,
           q.ai_suggested,
+          q.ai_standard_candidates,
           q.created_at,
           q.updated_at,
         );

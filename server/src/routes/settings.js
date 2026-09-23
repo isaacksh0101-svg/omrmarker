@@ -6,12 +6,29 @@ import {
   setGeminiModel,
   getStudentNetworkAddress,
   setStudentNetworkAddress,
+  getOnboardingStatus,
+  completeOnboarding,
+  resetOnboarding,
 } from '../services/appSettings.js';
 import { getAvailableGeminiModels } from '../services/geminiModels.js';
 import { getLanIpCandidates } from '../lib/lanIp.js';
 import * as repo from '../db/repo.js';
 
 export const settingsRouter = Router();
+
+settingsRouter.get('/onboarding', (_req, res) => {
+  res.json(getOnboardingStatus());
+});
+
+settingsRouter.put('/onboarding', (_req, res) => {
+  completeOnboarding();
+  res.json({ completed: true });
+});
+
+settingsRouter.post('/onboarding/reset', (_req, res) => {
+  resetOnboarding();
+  res.json({ completed: false });
+});
 
 // 실제 키 값은 응답으로 돌려주지 않는다 - 화면에는 설정 여부만 필요하다.
 settingsRouter.get('/ai', (_req, res) => {

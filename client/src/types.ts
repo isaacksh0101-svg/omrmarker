@@ -167,6 +167,17 @@ export interface StandardAccuracy {
   avg_time_spent_ms: number | null;
 }
 
+// 성취기준별 리포트의 "정답률 변화 추이" 차트 한 점 = 시험(응시) 하나.
+export interface StandardsTrendPoint {
+  exam_id: number;
+  title: string;
+  date: string;
+  attempted_count: number;
+  correct_count: number;
+  accuracy: number;
+  avg_time_spent_ms: number | null;
+}
+
 export interface QuestionStudentAnswer {
   roll_number: number;
   name: string | null;
