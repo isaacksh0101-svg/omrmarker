@@ -418,7 +418,7 @@ const BACKUP_CATEGORIES: Array<{
   {
     key: 'roster',
     label: '학생 명단',
-    description: '출석번호·이름만 담습니다. 가져오면 지금 명단을 통째로 대체합니다.',
+    description: '번호·이름만 담습니다. 가져오면 지금 명단을 통째로 대체합니다.',
     confirmMessage: '지금 있는 학생 명단이 모두 이 백업 파일 내용으로 교체됩니다. 계속할까요?',
     fileSuffix: '-명단',
   },
@@ -567,6 +567,7 @@ function AiSettingsSection() {
   const [loadingModels, setLoadingModels] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -617,6 +618,22 @@ function AiSettingsSection() {
       setError(err instanceof ApiError ? err.message : '저장 중 오류가 발생했습니다.');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function removeKey() {
+    if (!window.confirm('저장된 API 키를 삭제할까요? 삭제하면 문항 자동 추출 등 AI 기능을 쓸 수 없습니다.')) return;
+    setRemoving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await api.delete('/settings/ai');
+      setHasApiKey(false);
+      setModels([]);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '삭제 중 오류가 발생했습니다.');
+    } finally {
+      setRemoving(false);
     }
   }
 
@@ -676,9 +693,21 @@ function AiSettingsSection() {
         >
           API 키 발급받기 (Google AI Studio)
         </a>
-        <Button variant="secondary" disabled={saving || !apiKey.trim()} onClick={save}>
-          {saving ? '저장 중...' : '키 저장'}
-        </Button>
+        <div className="flex gap-2">
+          {hasApiKey && (
+            <button
+              type="button"
+              disabled={removing}
+              onClick={removeKey}
+              className="shrink-0 rounded-lg border border-line px-2.5 py-1.5 text-xs font-bold text-danger disabled:opacity-50"
+            >
+              {removing ? '삭제 중...' : '키 삭제'}
+            </button>
+          )}
+          <Button variant="secondary" disabled={saving || !apiKey.trim()} onClick={save}>
+            {saving ? '저장 중...' : '키 저장'}
+          </Button>
+        </div>
       </div>
       {hasApiKey && (
         <div className="mt-5 border-t border-line pt-5">
@@ -773,9 +802,94 @@ function AiSettingsSection() {
   );
 }
 
+function UpstageSettingsSection() {
+  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
+  const [apiKey, setApiKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [working, setWorking] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const expired = Date.now() >= Date.UTC(2027, 2, 20);
+
+  useEffect(() => {
+    api.get<{ hasApiKey: boolean }>('/settings/upstage')
+      .then((result) => setHasApiKey(result.hasApiKey))
+      .catch(() => setHasApiKey(false));
+  }, []);
+
+  async function save() {
+    if (!apiKey.trim() || expired) return;
+    setWorking(true);
+    setMessage(null);
+    try {
+      await api.put('/settings/upstage', { apiKey: apiKey.trim() });
+      setHasApiKey(true);
+      setApiKey('');
+      setMessage('Upstage API 키를 저장했습니다.');
+    } catch (error) {
+      setMessage(error instanceof ApiError ? error.message : '저장 중 오류가 발생했습니다.');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm('저장된 Upstage API 키를 삭제할까요?')) return;
+    setWorking(true);
+    try {
+      await api.delete('/settings/upstage');
+      setHasApiKey(false);
+      setMessage('Upstage API 키를 삭제했습니다.');
+    } catch (error) {
+      setMessage(error instanceof ApiError ? error.message : '삭제 중 오류가 발생했습니다.');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Card className="mt-6">
+      <h2 className="text-sm font-bold text-ink">Upstage Document Parse</h2>
+      <p className="mt-1 text-xs leading-relaxed text-ink-soft">
+        시험지를 먼저 판독한 뒤 Solar Pro 3가 ScoreLab 문항과 성취기준으로 정리하는 선택 기능입니다.
+        2027년 3월 19일까지만 활성화됩니다.
+      </p>
+      {expired ? (
+        <p className="mt-3 text-xs font-bold text-danger">사용 기간이 종료되어 비활성화되었습니다.</p>
+      ) : (
+        <>
+          {hasApiKey && <p className="mt-2 text-xs font-bold text-good">현재 Upstage 키가 설정되어 있습니다.</p>}
+          <div className="mt-3 flex gap-2">
+            <input
+              type={showKey ? 'text' : 'password'}
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              placeholder="up_..."
+              autoComplete="off"
+              className="min-w-0 flex-1 rounded-lg border border-line px-2.5 py-1.5 text-xs"
+            />
+            <button type="button" onClick={() => setShowKey((value) => !value)} className="rounded-lg border border-line px-2.5 py-1.5 text-xs text-ink-soft">
+              {showKey ? '숨기기' : '표시'}
+            </button>
+          </div>
+          <div className="mt-2.5 flex items-center justify-between gap-2">
+            <a href="https://console.upstage.ai/api-keys" target="_blank" rel="noreferrer" className="text-xs text-accent-ink underline">
+              Upstage API 키 발급
+            </a>
+            <div className="flex gap-2">
+              {hasApiKey && <Button variant="danger" size="sm" disabled={working} onClick={remove}>키 삭제</Button>}
+              <Button variant="secondary" disabled={working || !apiKey.trim()} onClick={save}>키 저장</Button>
+            </div>
+          </div>
+        </>
+      )}
+      {message && <p className="mt-2 text-xs font-bold text-ink-soft">{message}</p>}
+    </Card>
+  );
+}
+
 export function SettingsPage() {
   return (
-    <div className="mx-auto max-w-2xl px-6 py-12">
+    <div className="mx-auto max-w-3xl px-6 py-12">
       <PageHeader icon={IconSettings} title="환경설정" />
       <div className="animate-fade-in-up mt-7" style={{ animationDelay: '40ms' }}>
         <StudentAccessSection />
@@ -786,6 +900,9 @@ export function SettingsPage() {
       <div className="animate-fade-in-up" style={{ animationDelay: '100ms' }}>
         <AiSettingsSection />
       </div>
+      <div className="animate-fade-in-up" style={{ animationDelay: '110ms' }}>
+        <UpstageSettingsSection />
+      </div>
       <div className="animate-fade-in-up" style={{ animationDelay: '120ms' }}>
         <PasswordSection />
       </div>
@@ -795,7 +912,7 @@ export function SettingsPage() {
 
 export function DataManagementPage() {
   return (
-    <div className="mx-auto max-w-2xl px-6 py-12">
+    <div className="mx-auto max-w-3xl px-6 py-12">
       <PageHeader icon={IconBackup} title="데이터 관리" />
       <div className="animate-fade-in-up mt-1" style={{ animationDelay: '40ms' }}>
         <StorageLocationSection />

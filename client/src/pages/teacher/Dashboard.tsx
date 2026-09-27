@@ -74,7 +74,7 @@ export function Dashboard() {
   async function bulkDelete() {
     const ids = [...selectedIds];
     if (ids.length === 0) return;
-    if (!confirm(`선택한 시험지 ${ids.length}개를 삭제할까요?\n목록에서 사라지지만, 이미 응시한 결과는 계속 보관되어 시험별 리포트에서 확인할 수 있습니다.`)) {
+    if (!confirm(`선택한 시험지 ${ids.length}개를 삭제할까요?\n목록에서 사라지지만, 이미 응시한 결과는 계속 보관되어 시험별 분석에서 확인할 수 있습니다.`)) {
       return;
     }
     setBulkDeleting(true);
@@ -89,8 +89,8 @@ export function Dashboard() {
     }
   }
 
-  // 만들기 화면에는 아직 작성 중인 시험만 둔다 - 확정된 뒤에는 "시험지 관리" 화면에서
-  // 찾아 쓴다. 그래야 오래 쓰다 보면 쌓이는 지난 시험지들이 여기서 어지럽히지 않는다.
+  // 만들기 화면에는 아직 작성 중인 시험만 둔다. 작성 중·확정 시험 전체를 다시 열어
+  // 수정하는 일은 별도의 "시험지 관리" 화면에서 맡는다.
   const draftExams = exams.filter((exam) => exam.status === 'draft');
   const visibleExams = draftExams.filter(
     (exam) => subjectFilter === 'all' || exam.subject_id === subjectFilter,

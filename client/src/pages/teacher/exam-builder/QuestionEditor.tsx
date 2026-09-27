@@ -3,6 +3,7 @@ import { api } from '../../../api/client';
 import type { Question, StandardCandidate, StandardOption } from '../../../types';
 import { Card } from '../../../components/Card';
 import { Badge } from '../../../components/Badge';
+import { MathText } from '../../../components/MathText';
 import { StandardsPicker } from './StandardsPicker';
 
 // pdfjs-dist(PDF 렌더링용, 1MB+)는 이 재크롭 모달을 실제로 열 때만 필요하다 - 학생 응시
@@ -41,6 +42,7 @@ export function QuestionEditor({ examId, question, index, standardOptions, missi
   );
   const [savingField, setSavingField] = useState<string | null>(null);
   const [recropOpen, setRecropOpen] = useState(false);
+  const [recropMode, setRecropMode] = useState<'replace' | 'append'>('replace');
 
   const dirty = prompt !== question.prompt || points !== question.points;
 
@@ -110,6 +112,11 @@ export function QuestionEditor({ examId, question, index, standardOptions, missi
     saveStandards([...codes, code]);
   }
 
+  // Upstage(Solar Pro) 경로는 표·그림처럼 텍스트로 옮기기 어려운 문항에 이 표시를 남겨둔다
+  // (aiExtraction.js 참고). 이미지가 이미 채워졌으면 학생 화면엔 이미지가 우선 보이므로
+  // 더 이상 급하지 않다 - 그 전까지만 눈에 띄게 경고한다.
+  const needsManualImage = !question.prompt_image_path && question.prompt.includes('그림 있음');
+
   return (
     <Card className={missingReasons ? 'border-danger' : ''}>
       <div className="flex items-start justify-between gap-3">
@@ -117,6 +124,7 @@ export function QuestionEditor({ examId, question, index, standardOptions, missi
           <span className="text-sm font-bold text-ink-soft">{index + 1}.</span>
           <Badge tone="neutral">{question.type === 'mc' ? '객관식' : '단답형'}</Badge>
           {question.ai_suggested && <Badge tone="warn">AI 추출 - 확인 필요</Badge>}
+          {needsManualImage && <Badge tone="danger">이미지 필요</Badge>}
         </div>
         <button className="text-xs text-ink-soft hover:text-danger" onClick={deleteQuestion}>
           삭제
@@ -134,16 +142,36 @@ export function QuestionEditor({ examId, question, index, standardOptions, missi
             <p className="text-[11px] text-ink-soft">
               학생 화면엔 이 이미지가 문제 내용으로 보여집니다{question.type === 'mc' ? ' (보기도 이 안에 포함)' : ''}.
             </p>
-            <button className="shrink-0 text-xs font-bold text-accent" onClick={() => setRecropOpen(true)}>
-              다시 자르기
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                className="text-xs font-bold text-accent"
+                onClick={() => {
+                  setRecropMode('append');
+                  setRecropOpen(true);
+                }}
+              >
+                추가 정보 크롭하기
+              </button>
+              <button
+                className="text-xs font-bold text-accent"
+                onClick={() => {
+                  setRecropMode('replace');
+                  setRecropOpen(true);
+                }}
+              >
+                다시 자르기
+              </button>
+            </div>
           </div>
         </div>
       )}
       {!question.prompt_image_path && question.ai_suggested && (
         <button
           className="mt-3 self-start text-xs font-bold text-accent"
-          onClick={() => setRecropOpen(true)}
+          onClick={() => {
+            setRecropMode('replace');
+            setRecropOpen(true);
+          }}
         >
           + 원본에서 이미지 잘라오기
         </button>
@@ -153,6 +181,8 @@ export function QuestionEditor({ examId, question, index, standardOptions, missi
           <RecropModal
             examId={examId}
             questionId={question.id}
+            mode={recropMode}
+            existingImagePath={question.prompt_image_path}
             onClose={() => setRecropOpen(false)}
             onDone={() => {
               setRecropOpen(false);
@@ -165,14 +195,24 @@ export function QuestionEditor({ examId, question, index, standardOptions, missi
           백그라운드에서 검색/백업용 텍스트를 계속 채워두지만(추출 로직 쪽 처리), 이 편집
           화면에는 굳이 보여주지 않는다. 이미지가 없는 문항만 텍스트가 곧 문제 내용이므로 편집창을 둔다. */}
       {!question.prompt_image_path && (
-        <textarea
-          className="mt-3 w-full resize-none rounded-xl border border-line bg-bg px-3 py-2 text-sm text-ink outline-none focus:border-accent"
-          rows={2}
-          placeholder="문제 내용을 입력하세요"
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          onBlur={savePromptAndPoints}
-        />
+        <div className="mt-3">
+          <textarea
+            className="w-full resize-none rounded-xl border border-line bg-bg px-3 py-2 text-sm text-ink outline-none focus:border-accent"
+            rows={2}
+            placeholder="문제 내용을 입력하세요"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onBlur={savePromptAndPoints}
+          />
+          {prompt.includes('$') && (
+            <div className="mt-2 rounded-xl border border-accent/20 bg-accent-soft/40 px-3 py-2.5">
+              <p className="mb-1 text-[10px] font-bold text-accent-ink">학생 화면 수식 미리보기</p>
+              <p className="whitespace-pre-wrap text-sm font-bold text-ink">
+                <MathText text={prompt} />
+              </p>
+            </div>
+          )}
+        </div>
       )}
 
       <div className="mt-2 flex items-center gap-2">
@@ -213,16 +253,28 @@ export function QuestionEditor({ examId, question, index, standardOptions, missi
         ) : (
           <div className="mt-3 flex flex-col gap-2">
             <span className="text-xs font-bold text-ink-soft">보기 (정답 표시는 아래 "정답 입력"에서)</span>
+            {question.ai_suggested && (
+              <p className="text-[11px] font-bold text-warn">
+                AI가 옮겨 적은 보기입니다 - 숫자·단위·기호가 원본과 정확히 같은지 확인해주세요.
+              </p>
+            )}
             {choices.map((c, i) => (
-              <div key={i} className="flex items-center gap-2">
+              <div key={i} className="flex items-start gap-2">
                 <span className="w-5 shrink-0 text-xs font-bold text-ink-soft">{i + 1}.</span>
-                <input
-                  className="flex-1 rounded-lg border border-line bg-bg px-2 py-1 text-sm text-ink outline-none focus:border-accent"
-                  placeholder={`보기 ${i + 1}`}
-                  value={c.text}
-                  onChange={(e) => updateChoiceText(i, e.target.value)}
-                  onBlur={() => saveChoices(choices)}
-                />
+                <div className="min-w-0 flex-1">
+                  <input
+                    className="w-full rounded-lg border border-line bg-bg px-2 py-1 text-sm text-ink outline-none focus:border-accent"
+                    placeholder={`보기 ${i + 1}`}
+                    value={c.text}
+                    onChange={(e) => updateChoiceText(i, e.target.value)}
+                    onBlur={() => saveChoices(choices)}
+                  />
+                  {c.text.includes('$') && (
+                    <p className="mt-1 rounded-lg bg-accent-soft/40 px-2 py-1.5 text-sm text-ink">
+                      <MathText text={c.text} />
+                    </p>
+                  )}
+                </div>
                 {choices.length > 2 && (
                   <button className="text-xs text-ink-soft hover:text-danger" onClick={() => removeChoiceRow(i)}>
                     ✕

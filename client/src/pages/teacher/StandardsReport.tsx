@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/client';
-import type { RosterEntry, StandardAccuracy, StandardsTrendPoint, StudentExamSummary } from '../../types';
+import type {
+  RosterEntry,
+  StandardAccuracy,
+  StandardsTrendPoint,
+  StandardWeaknessPattern,
+  StudentExamSummary,
+} from '../../types';
 import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
 import { AccuracyRow } from '../../components/AccuracyRow';
@@ -10,6 +16,7 @@ import { TimeUnitBars } from '../../components/TimeUnitBars';
 import { TrendChart, type TrendChartPoint } from '../../components/TrendChart';
 import { StatCard, StatCardRow } from '../../components/StatCard';
 import { PageHeader } from '../../components/PageHeader';
+import { Pagination } from '../../components/Pagination';
 import { IconChart } from '../../components/icons';
 import { displaySubjectName } from '../../lib/subjectName';
 import { downloadWorkbook } from '../../lib/exportXlsx';
@@ -19,6 +26,7 @@ const GRADE_LABEL: Record<string, string> = {
   elem_3_4: '3~4학년군',
   elem_5_6: '5~6학년군',
 };
+const PAGE_SIZE = 4;
 
 function formatMs(ms: number | null) {
   if (ms == null) return '-';
@@ -39,6 +47,7 @@ interface CompareItem {
   myAccuracy: number | null;
   myAttempted: number;
   myAvgTimeMs: number | null;
+  latestAttemptedAt: string | null;
 }
 
 export function StandardsReport() {
@@ -56,10 +65,20 @@ export function StandardsReport() {
   const [trendCode, setTrendCode] = useState<string>('');
   const [classTrend, setClassTrend] = useState<StandardsTrendPoint[]>([]);
   const [myTrend, setMyTrend] = useState<StandardsTrendPoint[]>([]);
+  const [weaknessPatterns, setWeaknessPatterns] = useState<StandardWeaknessPattern[]>([]);
+  const [studentExamPage, setStudentExamPage] = useState(1);
+  const [patternPage, setPatternPage] = useState(1);
+  const [categoryPages, setCategoryPages] = useState<Record<string, number>>({});
 
   useEffect(() => {
     api.get<RosterEntry[]>('/roster').then(setRoster);
   }, []);
+
+  useEffect(() => {
+    setStudentExamPage(1);
+    setPatternPage(1);
+    setCategoryPages({});
+  }, [rollNumber, subjectFilter, from, to, sortLowFirst]);
 
   // 학생을 고르면 그 학생이 실제로 낸 시험들(문항별 상세를 열어볼 수 있는 목록)도 같이 불러온다.
   useEffect(() => {
@@ -118,6 +137,23 @@ export function StandardsReport() {
       setMyTrend([]);
     }
   }, [subjectFilter, trendCode, rollNumber, from, to, data, classData]);
+
+  // 여러 시험에 걸쳐 반복되는 성취기준별 약점/개선 패턴 - 학생을 골랐을 때만 의미가 있다.
+  useEffect(() => {
+    if (!rollNumber) {
+      setWeaknessPatterns([]);
+      return;
+    }
+    const params = new URLSearchParams();
+    params.set('roll_number', rollNumber);
+    if (subjectFilter !== 'all') {
+      const subjectId = classData.find((s) => s.subject_name === subjectFilter)?.subject_id;
+      if (subjectId) params.set('subject_id', subjectId);
+    }
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    api.get<StandardWeaknessPattern[]>(`/standards/weakness-patterns?${params.toString()}`).then(setWeaknessPatterns);
+  }, [rollNumber, subjectFilter, from, to, classData]);
 
   const comparing = rollNumber !== '';
 
@@ -194,6 +230,7 @@ export function StandardsReport() {
           myAccuracy: mine ? mine.accuracy : null,
           myAttempted: mine ? mine.attempted_count : 0,
           myAvgTimeMs: mine ? mine.avg_time_spent_ms : null,
+          latestAttemptedAt: mine?.latest_attempted_at ?? null,
         };
       });
   }, [comparing, data, classData, subjectFilter]);
@@ -204,7 +241,10 @@ export function StandardsReport() {
 
   const grouped = useMemo(() => {
     const sorted = [...filteredData].sort((a, b) =>
-      sortLowFirst ? a.accuracy - b.accuracy : b.attempted_count - a.attempted_count,
+      sortLowFirst
+        ? a.accuracy - b.accuracy
+        : (b.latest_attempted_at ?? '').localeCompare(a.latest_attempted_at ?? '')
+          || b.attempted_count - a.attempted_count,
     );
     const bySubject = new Map<string, StandardAccuracy[]>();
     for (const s of sorted) {
@@ -217,7 +257,10 @@ export function StandardsReport() {
 
   const groupedCompare = useMemo(() => {
     const sorted = [...compareItems].sort((a, b) =>
-      sortLowFirst ? (a.myAccuracy ?? 0) - (b.myAccuracy ?? 0) : b.classAttempted - a.classAttempted,
+      sortLowFirst
+        ? (a.myAccuracy ?? 0) - (b.myAccuracy ?? 0)
+        : (b.latestAttemptedAt ?? '').localeCompare(a.latestAttemptedAt ?? '')
+          || b.classAttempted - a.classAttempted,
     );
     const bySubject = new Map<string, CompareItem[]>();
     for (const item of sorted) {
@@ -266,7 +309,7 @@ export function StandardsReport() {
     <div className="mx-auto max-w-3xl px-6 py-12">
       <PageHeader
         icon={IconChart}
-        title="학생별 리포트"
+        title="학생별 분석"
         right={
           hasExportable && (
             <button className="text-xs font-bold text-accent hover:underline" onClick={exportExcel}>
@@ -334,25 +377,23 @@ export function StandardsReport() {
           className="ml-auto font-bold text-ink-soft hover:text-accent"
           onClick={() => setSortLowFirst((v) => !v)}
         >
-          {sortLowFirst ? '푼 문제 수순으로 보기' : '정답률 낮은 순으로 보기'}
+          {sortLowFirst ? '최근 학습한 순으로 보기' : '정답률 낮은 순으로 보기'}
         </button>
       </div>
 
-      {!comparing && (
-        <div className="animate-fade-in-up mt-4" style={{ animationDelay: '40ms' }}>
-          <StatCardRow>
-            <StatCard label="집계된 성취기준 수" value={`${filteredData.length}개`} />
-            <StatCard label="누적 푼 문제 수" value={`${totalAttempted}문제`} />
-            <StatCard label="누적 정답률" value={`${overallPct}%`} />
-          </StatCardRow>
-        </div>
-      )}
+      <div className="animate-fade-in-up mt-4" style={{ animationDelay: '40ms' }}>
+        <StatCardRow>
+          <StatCard label="집계된 성취기준 수" value={`${filteredData.length}개`} />
+          <StatCard label="누적 푼 문제 수" value={`${totalAttempted}문제`} />
+          <StatCard label="누적 정답률" value={`${overallPct}%`} />
+        </StatCardRow>
+      </div>
 
       {comparing && studentExams.length > 0 && (
         <Card className="animate-fade-in-up mt-4" style={{ animationDelay: '40ms' }}>
           <h2 className="text-sm font-bold text-ink">이 학생이 응시한 시험</h2>
           <div className="mt-2 flex flex-col divide-y divide-line">
-            {studentExams.map((se) => (
+            {studentExams.slice((studentExamPage - 1) * PAGE_SIZE, studentExamPage * PAGE_SIZE).map((se) => (
               <button
                 key={se.session_id}
                 type="button"
@@ -370,6 +411,49 @@ export function StandardsReport() {
               </button>
             ))}
           </div>
+          <Pagination
+            page={studentExamPage}
+            totalPages={Math.ceil(studentExams.length / PAGE_SIZE)}
+            onChange={setStudentExamPage}
+          />
+        </Card>
+      )}
+
+      {comparing && weaknessPatterns.length > 0 && (
+        <Card className="animate-fade-in-up mt-4" style={{ animationDelay: '50ms' }}>
+          <h2 className="text-sm font-bold text-ink">여러 시험에 걸친 패턴</h2>
+          <p className="mt-0.5 text-[11px] text-ink-soft">
+            최근 3개 시험 모두에서 같은 경향이 나타난 성취기준만 표시됩니다. 단발성 결과는 아래 시험별
+            정답률 표에서 확인하세요.
+          </p>
+          <div className="mt-2 flex flex-col gap-2">
+            {weaknessPatterns.slice((patternPage - 1) * PAGE_SIZE, patternPage * PAGE_SIZE).map((p) => (
+              <div key={p.code} className="flex items-start gap-2 rounded-xl bg-bg p-3 text-xs">
+                <Badge tone={p.kind === 'weak' ? 'danger' : 'good'}>
+                  {p.kind === 'weak' ? '반복 확인 필요' : '최근 개선'}
+                </Badge>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-bold text-ink">
+                    [{p.code}] {p.statement}
+                  </p>
+                  <p className="mt-0.5 text-ink-soft">
+                    {p.kind === 'weak'
+                      ? `최근 ${p.recentGapsPct?.length ?? p.examCount}개 시험에서 학급 평균보다 ${
+                          p.recentGapsPct?.map((g) => `${g}%p`).join(' · ') ?? ''
+                        } 낮음`
+                      : `최근 ${p.recentAccuracies.length}회 정답률이 ${p.recentAccuracies
+                          .map((a) => `${Math.round(a * 100)}%`)
+                          .join(' → ')}로 개선됨`}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <Pagination
+            page={patternPage}
+            totalPages={Math.ceil(weaknessPatterns.length / PAGE_SIZE)}
+            onChange={setPatternPage}
+          />
         </Card>
       )}
 
@@ -409,15 +493,18 @@ export function StandardsReport() {
             여기에 반 평균 대비 비교가 표시됩니다.
           </p>
         ) : (
-          groupedCompare.map(([subjectName, items], i) => (
-            <Card
+          groupedCompare.map(([subjectName, items], i) => {
+            const totalPages = Math.ceil(items.length / PAGE_SIZE);
+            const page = Math.min(categoryPages[subjectName] ?? 1, totalPages);
+            const visibleItems = items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+            return <Card
               key={subjectName}
               className="animate-fade-in-up mt-4"
               style={{ animationDelay: `${80 + Math.min(i, 10) * 30}ms` }}
             >
               <h2 className="text-sm font-bold text-ink">{displaySubjectName(subjectName)}</h2>
               <div className="mt-2 flex flex-col divide-y divide-line">
-                {items.map((item) => (
+                {visibleItems.map((item) => (
                   <div key={item.code} className="grid grid-cols-1 gap-3 py-3 sm:grid-cols-[1fr_9rem_9rem]">
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-ink">[{item.code}]</p>
@@ -446,8 +533,13 @@ export function StandardsReport() {
                   </div>
                 ))}
               </div>
-            </Card>
-          ))
+              <Pagination
+                page={page}
+                totalPages={totalPages}
+                onChange={(nextPage) => setCategoryPages((current) => ({ ...current, [subjectName]: nextPage }))}
+              />
+            </Card>;
+          })
         )
       ) : grouped.length === 0 ? (
         <p className="mt-8 text-sm text-ink-soft">
@@ -455,15 +547,18 @@ export function StandardsReport() {
           여기에 정답률이 집계됩니다.
         </p>
       ) : (
-        grouped.map(([subjectName, items], i) => (
-          <Card
+        grouped.map(([subjectName, items], i) => {
+          const totalPages = Math.ceil(items.length / PAGE_SIZE);
+          const page = Math.min(categoryPages[subjectName] ?? 1, totalPages);
+          const visibleItems = items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+          return <Card
             key={subjectName}
             className="animate-fade-in-up mt-4"
             style={{ animationDelay: `${80 + Math.min(i, 10) * 30}ms` }}
           >
             <h2 className="text-sm font-bold text-ink">{displaySubjectName(subjectName)}</h2>
             <div className="mt-2 divide-y divide-line">
-              {items.map((s) => (
+              {visibleItems.map((s) => (
                 <AccuracyRow
                   key={s.code}
                   label={`[${s.code}]`}
@@ -474,8 +569,13 @@ export function StandardsReport() {
                 />
               ))}
             </div>
-          </Card>
-        ))
+            <Pagination
+              page={page}
+              totalPages={totalPages}
+              onChange={(nextPage) => setCategoryPages((current) => ({ ...current, [subjectName]: nextPage }))}
+            />
+          </Card>;
+        })
       )}
     </div>
   );

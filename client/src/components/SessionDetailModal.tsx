@@ -27,7 +27,7 @@ interface SessionDetailModalProps {
   onRevive?: (sessionId: number) => void;
 }
 
-// 감독 화면과 리포트(시험지 관리 결과보기, 학생별 리포트) 양쪽에서 같이 쓰는 "학생 한 명 ×
+// 감독 화면과 리포트(시험별 분석 결과보기, 학생별 리포트) 양쪽에서 같이 쓰는 "학생 한 명 ×
 // 시험 한 번" 상세 보기. 문항별로 무엇을 답했는지, 얼마나 걸렸는지, 필기를 남겼다면 그
 // 필기까지 다시 볼 수 있다.
 export function SessionDetailModal({

@@ -125,9 +125,9 @@ export function IconPen(props: SVGProps<SVGSVGElement>) {
 export function IconEraser(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>
-      <path d="M17.5 3.5 20.5 6.5 9.8 17.2H5.5v-4.3L17.5 3.5Z" />
-      <path d="M9.8 17.2H20" />
-      <path d="M13 7 17 11" />
+      <path d="m7.2 20-4-4a2.4 2.4 0 0 1 0-3.4L13.8 2a2.4 2.4 0 0 1 3.4 0l3.6 3.6a2.4 2.4 0 0 1 0 3.4L9.8 20H7.2Z" />
+      <path d="m11 4.8 8.2 8.2" />
+      <path d="M7.2 20H21" />
     </svg>
   );
 }
@@ -154,11 +154,31 @@ export function IconHand(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function IconFingerDraw(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      {/* 검지 위에 그려지는 잉크 궤적 - 손가락으로 획을 긋고 있다는 걸 보여준다. */}
+      <path d="M8.4 3.6c1-1.1 2.1-1.1 3.1 0s2.1 1.1 3.1 0" />
+      <path d="M9.2 13.2V5.8a1.55 1.55 0 0 1 3.1 0v5.4" />
+      <path d="M12.3 10.4V8.7a1.45 1.45 0 0 1 2.9 0v3" />
+      <path d="M15.2 11V9.8a1.4 1.4 0 0 1 2.8 0v5.1c0 3.2-2.2 5.5-5.6 5.5-2.4 0-3.8-.9-5.1-2.6l-2.5-3.2a1.45 1.45 0 0 1 2.2-1.9l2.2 2.1" />
+    </svg>
+  );
+}
+
 export function IconUndo(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>
       <path d="M7 7 3.5 10.5 7 14" />
       <path d="M3.5 10.5h10.2c3.2 0 5.8 2.6 5.8 5.8v0.2" />
+    </svg>
+  );
+}
+
+export function IconChevronRight(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M9 5.5 15 12l-6 6.5" />
     </svg>
   );
 }

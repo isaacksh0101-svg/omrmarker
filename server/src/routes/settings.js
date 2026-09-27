@@ -3,7 +3,11 @@ import {
   getGeminiApiKey,
   getGeminiModel,
   setGeminiApiKey,
+  clearGeminiApiKey,
   setGeminiModel,
+  getUpstageApiKey,
+  setUpstageApiKey,
+  clearUpstageApiKey,
   getStudentNetworkAddress,
   setStudentNetworkAddress,
   getOnboardingStatus,
@@ -47,6 +51,29 @@ settingsRouter.put('/ai', (req, res) => {
     setGeminiModel(model);
   }
   res.json({ hasApiKey: Boolean(getGeminiApiKey()), model: getGeminiModel() });
+});
+
+// API 키 없이도(로컬 OCR만으로) 문항 추출이 동작하는지 테스트할 수 있도록, 저장된 키를
+// 지울 수 있게 한다 - PUT /ai는 빈 값을 거부하므로 교체만 가능하고 삭제는 안 됐었다.
+settingsRouter.delete('/ai', (_req, res) => {
+  clearGeminiApiKey();
+  res.json({ hasApiKey: Boolean(getGeminiApiKey()), model: getGeminiModel() });
+});
+
+settingsRouter.get('/upstage', (_req, res) => {
+  res.json({ hasApiKey: Boolean(getUpstageApiKey()), availableUntil: '2027-03-19' });
+});
+
+settingsRouter.put('/upstage', (req, res) => {
+  const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
+  if (!apiKey) return res.status(400).json({ error: 'Upstage API 키를 입력해주세요.' });
+  setUpstageApiKey(apiKey);
+  res.json({ hasApiKey: true, availableUntil: '2027-03-19' });
+});
+
+settingsRouter.delete('/upstage', (_req, res) => {
+  clearUpstageApiKey();
+  res.json({ hasApiKey: false, availableUntil: '2027-03-19' });
 });
 
 settingsRouter.get('/ai/models', async (req, res) => {

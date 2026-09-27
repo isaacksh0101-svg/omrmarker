@@ -41,11 +41,9 @@ examsRouter.post('/', requireAuth, async (req, res) => {
 // (GET /:id 보다 먼저 등록해야 한다 - 안 그러면 '/for-student'가 :id로 잡혀서 이 라우트에
 // 닿기 전에 위의 로그인 검사에 걸린다.)
 examsRouter.get('/for-student', async (_req, res) => {
-  const exams = await repo.listExams();
+  const exams = await repo.listSupervisedExams();
   res.json(
-    exams
-      .filter((e) => e.status === 'finalized')
-      .map((e) => ({
+    exams.map((e) => ({
         id: e.id,
         title: e.title,
         subject_id: e.subject_id,
@@ -54,6 +52,26 @@ examsRouter.get('/for-student', async (_req, res) => {
         mode: e.mode,
       })),
   );
+});
+
+examsRouter.post('/:id/supervise', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const exam = await repo.getExam(id);
+  if (!exam || exam.status !== 'finalized' || exam.ends_at) {
+    return res.status(400).json({ error: '확정된 시험만 감독할 수 있습니다.' });
+  }
+  await repo.superviseExam(id);
+  res.json(await repo.getExam(id));
+});
+
+examsRouter.post('/:id/admission-code', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const exam = await repo.getExam(id);
+  if (!exam || exam.status !== 'finalized' || !exam.supervised_at || exam.ends_at) {
+    return res.status(400).json({ error: '감독 중인 시험의 코드만 변경할 수 있습니다.' });
+  }
+  const admissionCode = await repo.regenerateAdmissionCode(id);
+  res.json({ admission_code: admissionCode });
 });
 
 examsRouter.get('/:id', requireAuth, async (req, res) => {
@@ -119,6 +137,13 @@ examsRouter.delete('/:id/permanent', requireAuth, async (req, res) => {
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
 
   await repo.hardDeleteExam(id);
+  // 원본 페이지는 여러 문항이 공유하므로 문항 하나를 지울 때는 보존하고, 시험을 영구
+  // 삭제할 때 시험 전용 폴더를 함께 정리한다. 보관(숨기기)에서는 복구를 위해 유지한다.
+  const sourceDir = path.resolve(config.uploadsDir, 'sources', String(id));
+  const sourceRoot = path.resolve(config.uploadsDir, 'sources');
+  if (sourceDir.startsWith(`${sourceRoot}${path.sep}`)) {
+    fs.rm(sourceDir, { recursive: true, force: true }, () => {});
+  }
   res.status(204).end();
 });
 
@@ -207,10 +232,27 @@ examsRouter.delete('/:id/questions/:qid', requireAuth, async (req, res) => {
   res.json(await repo.getExamFull(examId));
 });
 
+// AI 분석 당시의 시험지 페이지를 재자르기 화면에 제공한다. 전체 시험지 원본은 학생용
+// /uploads 정적 경로로 공개하지 않고, 시험/문항 소유 관계와 교사 로그인을 모두 확인한다.
+examsRouter.get('/:id/questions/:qid/source-image', requireAuth, async (req, res) => {
+  const examId = Number(req.params.id);
+  const qid = Number(req.params.qid);
+  const question = await getQuestionOr404(examId, qid, res);
+  if (!question) return;
+  if (!question.source_image_path) {
+    return res.status(404).json({ error: '저장된 원본 페이지가 없습니다.' });
+  }
+
+  const sourceRoot = path.resolve(config.uploadsDir, 'sources');
+  const sourcePath = path.resolve(config.uploadsDir, question.source_image_path);
+  if (!sourcePath.startsWith(`${sourceRoot}${path.sep}`) || !fs.existsSync(sourcePath)) {
+    return res.status(404).json({ error: '저장된 원본 페이지를 찾을 수 없습니다.' });
+  }
+  res.sendFile(sourcePath);
+});
+
 // 문항 이미지 재크롭: AI가 자동으로 잘라준 이미지가 잘못됐을 때, 교사가 브라우저에서
-// 원본 PDF/이미지를 다시 골라 영역을 선택해 자른 결과(PNG)만 여기로 올린다. 원본 파일
-// 자체는 서버로 전송되지 않고 클라이언트에서 이미 잘린 이미지만 받으므로, 서버가 시험지
-// 원본을 계속 보관할 필요가 없다.
+// 저장된 원본 페이지 또는 교사가 직접 고른 파일에서 영역을 선택해 자른 결과(PNG)를 받는다.
 examsRouter.post('/:id/questions/:qid/prompt-image', requireAuth, upload.single('image'), async (req, res) => {
   const examId = Number(req.params.id);
   const qid = Number(req.params.qid);

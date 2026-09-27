@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../api/client';
-import type { Exam, ExamResultsData, SessionMonitorDetail } from '../../types';
+import type { Exam, ExamResultsData, SessionMonitorDetail, SessionQuestionOutlier } from '../../types';
 import type { StrokesPayload } from '../../lib/strokes';
 import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
@@ -38,6 +38,7 @@ export function SessionReview() {
   const [detail, setDetail] = useState<SessionMonitorDetail | null>(null);
   const [resultsData, setResultsData] = useState<ExamResultsData | null>(null);
   const [openStrokesIndex, setOpenStrokesIndex] = useState<number | null>(null);
+  const [questionOutliers, setQuestionOutliers] = useState<SessionQuestionOutlier[]>([]);
 
   useEffect(() => {
     api.get<Exam>(`/exams/${examId}`).then(setExam);
@@ -46,10 +47,12 @@ export function SessionReview() {
   useEffect(() => {
     setDetail(null);
     setOpenStrokesIndex(null);
+    setQuestionOutliers([]);
     api.get<SessionMonitorDetail>(`/exams/${examId}/sessions/${sid}/monitor`).then(setDetail);
+    api.get<SessionQuestionOutlier[]>(`/exams/${examId}/sessions/${sid}/question-insights`).then(setQuestionOutliers);
   }, [examId, sid]);
 
-  // 이전/다음 학생 이동을 위해 이 시험의 전체 세션 목록(출석번호 순)을 한 번 불러온다.
+  // 이전/다음 학생 이동을 위해 이 시험의 전체 세션 목록(번호 순)을 한 번 불러온다.
   useEffect(() => {
     api.get<ExamResultsData>(`/exams/${examId}/results`).then(setResultsData);
   }, [examId]);
@@ -129,6 +132,16 @@ export function SessionReview() {
             // 나름 열심히 시도한 흔적(필기)이 있는데도 틀렸다 - 부주의가 아니라 이해가
             // 부족했을 가능성이 높은 경우라, "혼낼 게 아니라 도와줘야 할" 신호로 구분한다.
             const triedHardButWrong = h.is_correct === 0 && points >= MEANINGFUL_STROKE_POINTS;
+            const timeOutlier = questionOutliers.find((o) => o.order_index === h.order_index);
+            const classStat = resultsData?.questionStats.find((q) => q.order_index === h.order_index);
+            const timeOutlierTitle =
+              timeOutlier && classStat
+                ? `이 학생 ${formatMs(h.time_spent_ms)} · 학급 평균 ${formatMs(classStat.avg_time_spent_ms)} · 이 문항 정답률 ${
+                    classStat.answered_count > 0
+                      ? Math.round((classStat.correct_count / classStat.answered_count) * 100)
+                      : 0
+                  }%`
+                : undefined;
             return (
               <Card key={h.order_index} className="animate-fade-in-up">
                 <div className="flex items-start gap-3">
@@ -154,10 +167,23 @@ export function SessionReview() {
                       )
                     )}
 
-                    {(correctWithoutWork || triedHardButWrong) && (
+                    {(correctWithoutWork || triedHardButWrong || timeOutlier) && (
                       <div className="mt-1.5 flex flex-wrap gap-1.5">
-                        {correctWithoutWork && <Badge tone="neutral">필기 없이 정답</Badge>}
-                        {triedHardButWrong && <Badge tone="warn">필기 흔적 있는데 오답</Badge>}
+                        {correctWithoutWork && (
+                          <Badge tone="neutral" title="필기 기록이 없습니다 - 암산했거나 찍었을 수 있습니다.">
+                            필기 없이 정답
+                          </Badge>
+                        )}
+                        {triedHardButWrong && (
+                          <Badge tone="warn" title={`필기 포인트 ${points}개 - 시도한 흔적은 있지만 오답입니다.`}>
+                            필기 흔적 있는데 오답
+                          </Badge>
+                        )}
+                        {timeOutlier && (
+                          <Badge tone="warn" title={timeOutlierTitle}>
+                            {timeOutlier.outlierReason}
+                          </Badge>
+                        )}
                       </div>
                     )}
 

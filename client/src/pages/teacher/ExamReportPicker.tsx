@@ -4,10 +4,12 @@ import { api, ApiError } from '../../api/client';
 import type { Exam, Subject } from '../../types';
 import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
-import { Button } from '../../components/Button';
 import { PageHeader } from '../../components/PageHeader';
-import { IconDocument } from '../../components/icons';
+import { Pagination } from '../../components/Pagination';
+import { IconChart } from '../../components/icons';
 import { displaySubjectName } from '../../lib/subjectName';
+
+const PAGE_SIZE = 8;
 
 const GRADE_LABEL: Record<string, string> = {
   elem_1_2: '1~2학년군',
@@ -22,38 +24,14 @@ export function ExamReportPicker() {
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [showArchived, setShowArchived] = useState(false);
-  // 선택 삭제 모드 - 켜져 있는 동안엔 카드를 눌러도 결과로 안 들어가고 선택만 토글된다.
-  const [selectMode, setSelectMode] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [editingMemoId, setEditingMemoId] = useState<number | null>(null);
   const [memoDraft, setMemoDraft] = useState('');
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     api.get<Exam[]>('/exams').then(setExams);
     api.get<Subject[]>('/standards/subjects').then(setSubjects);
   }, []);
-
-  async function hide(exam: Exam, e: React.MouseEvent) {
-    e.stopPropagation();
-    try {
-      await api.delete(`/exams/${exam.id}`);
-      setExams((prev) => prev.map((e2) => (e2.id === exam.id ? { ...e2, status: 'archived' } : e2)));
-    } catch (err) {
-      alert(err instanceof ApiError ? err.message : '숨기기 중 오류가 발생했습니다.');
-    }
-  }
-
-  async function unhide(exam: Exam, e: React.MouseEvent) {
-    e.stopPropagation();
-    try {
-      const updated = await api.post<Exam>(`/exams/${exam.id}/unarchive`);
-      setExams((prev) => prev.map((e2) => (e2.id === exam.id ? updated : e2)));
-    } catch (err) {
-      alert(err instanceof ApiError ? err.message : '다시 보이기 중 오류가 발생했습니다.');
-    }
-  }
 
   function startEditMemo(exam: Exam, e: React.MouseEvent) {
     e.stopPropagation();
@@ -76,45 +54,12 @@ export function ExamReportPicker() {
     }
   }
 
-  function toggleSelect(id: number) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function exitSelectMode() {
-    setSelectMode(false);
-    setSelectedIds(new Set());
-  }
-
-  async function bulkDelete() {
-    const ids = [...selectedIds];
-    if (ids.length === 0) return;
-    if (
-      !confirm(
-        `선택한 시험 ${ids.length}개를 영구 삭제할까요?\n이 시험들에 대한 학생 응시 기록까지 전부 사라지며 되돌릴 수 없습니다.`,
-      )
-    ) {
-      return;
-    }
-    setBulkDeleting(true);
-    try {
-      await Promise.all(ids.map((id) => api.delete(`/exams/${id}/permanent`)));
-      setExams((prev) => prev.filter((e2) => !selectedIds.has(e2.id)));
-      exitSelectMode();
-    } catch (err) {
-      alert(err instanceof ApiError ? err.message : '삭제 중 오류가 발생했습니다.');
-    } finally {
-      setBulkDeleting(false);
-    }
-  }
-
   // 관리 화면은 확정된(+숨긴) 시험만 다룬다 - 아직 작성 중인 시험은 "시험지 만들기"
   // 화면 몫이라 여기 안 섞는다.
-  const manageableExams = useMemo(() => exams.filter((exam) => exam.status !== 'draft'), [exams]);
+  const manageableExams = useMemo(
+    () => exams.filter((exam) => exam.status !== 'draft' && exam.status !== 'archived'),
+    [exams],
+  );
 
   // 드롭다운에는 실제로 시험이 있는 과목만 보여준다 - 텅 빈 과목까지 나열하면 고를 게
   // 없는 항목들만 늘어난다.
@@ -125,40 +70,22 @@ export function ExamReportPicker() {
 
   const visibleExams = useMemo(() => {
     return manageableExams.filter((exam) => {
-      if (!showArchived && exam.status === 'archived') return false;
       if (subjectFilter !== 'all' && exam.subject_id !== subjectFilter) return false;
       const examDate = exam.created_at.slice(0, 10);
       if (dateFrom && examDate < dateFrom) return false;
       if (dateTo && examDate > dateTo) return false;
       return true;
     });
-  }, [manageableExams, showArchived, subjectFilter, dateFrom, dateTo]);
+  }, [manageableExams, subjectFilter, dateFrom, dateTo]);
+  const totalPages = Math.ceil(visibleExams.length / PAGE_SIZE);
+  const safePage = Math.min(page, Math.max(1, totalPages));
+  const pagedExams = visibleExams.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+  useEffect(() => setPage(1), [subjectFilter, dateFrom, dateTo]);
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      <PageHeader
-        icon={IconDocument}
-        title="시험지 관리"
-        right={
-          !selectMode ? (
-            manageableExams.length > 0 && (
-              <button className="text-xs font-bold text-ink-soft hover:text-ink" onClick={() => setSelectMode(true)}>
-                선택 삭제
-              </button>
-            )
-          ) : (
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-ink-soft">{selectedIds.size}개 선택됨</span>
-              <button className="text-xs font-bold text-ink-soft hover:text-ink" onClick={exitSelectMode}>
-                취소
-              </button>
-              <Button variant="danger" size="sm" disabled={selectedIds.size === 0 || bulkDeleting} onClick={bulkDelete}>
-                {bulkDeleting ? '삭제 중...' : `영구 삭제 (${selectedIds.size})`}
-              </Button>
-            </div>
-          )
-        }
-      />
+      <PageHeader icon={IconChart} title="시험별 분석" />
 
       {manageableExams.length > 0 && (
         <div className="animate-fade-in-up mt-5 flex flex-wrap items-center gap-2 text-xs">
@@ -201,10 +128,6 @@ export function ExamReportPicker() {
             </button>
           )}
 
-          <label className="ml-auto flex items-center gap-1.5 font-bold text-ink-soft">
-            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
-            숨김 항목 보기
-          </label>
         </div>
       )}
 
@@ -214,34 +137,19 @@ export function ExamReportPicker() {
         ) : visibleExams.length === 0 ? (
           <p className="text-sm text-ink-soft">조건에 맞는 시험이 없습니다.</p>
         ) : (
-          visibleExams.map((exam, i) => {
-            const selected = selectedIds.has(exam.id);
+          pagedExams.map((exam, i) => {
             const editingMemo = editingMemoId === exam.id;
             return (
               <Card
                 key={exam.id}
-                className={`animate-fade-in-up flex items-center justify-between gap-3 transition-all duration-200 ${
-                  selectMode
-                    ? `cursor-pointer ${selected ? 'border-accent bg-accent-soft' : 'hover:border-accent/40'}`
-                    : 'cursor-pointer hover:-translate-y-0.5 hover:border-accent/60 hover:shadow-[0_4px_12px_rgba(16,24,40,0.08)]'
-                }`}
+                className="animate-fade-in-up flex cursor-pointer items-center justify-between gap-3 transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/60 hover:shadow-[0_4px_12px_rgba(16,24,40,0.08)]"
                 style={{ animationDelay: `${Math.min(i, 12) * 25}ms` }}
-                onClick={() => (selectMode ? toggleSelect(exam.id) : navigate(`/exams/${exam.id}/results`))}
+                onClick={() => navigate(`/exams/${exam.id}/results`)}
               >
                 <div className="flex min-w-0 items-center gap-3">
-                  {selectMode && (
-                    <span
-                      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 text-[11px] font-bold transition-colors duration-150 ${
-                        selected ? 'border-accent bg-accent text-white' : 'border-line text-transparent'
-                      }`}
-                    >
-                      ✓
-                    </span>
-                  )}
                   <div className="min-w-0">
                     <p className="flex items-center gap-1.5 text-sm font-bold text-ink">
                       <span className="truncate">{exam.title}</span>
-                      {exam.status === 'archived' && <Badge tone="neutral">숨김</Badge>}
                     </p>
                     <p className="mt-0.5 text-xs text-ink-soft">
                       {GRADE_LABEL[exam.grade_cluster] || exam.grade_cluster} · {exam.subject_id} ·{' '}
@@ -283,28 +191,13 @@ export function ExamReportPicker() {
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <Badge tone="good">결과 보기</Badge>
-                  {!selectMode && exam.status === 'archived' && (
-                    <button
-                      className="text-xs font-bold text-ink-soft hover:text-accent"
-                      onClick={(e) => unhide(exam, e)}
-                    >
-                      다시 보이기
-                    </button>
-                  )}
-                  {!selectMode && exam.status === 'finalized' && (
-                    <button
-                      className="text-xs font-bold text-ink-soft hover:text-danger"
-                      onClick={(e) => hide(exam, e)}
-                    >
-                      숨기기
-                    </button>
-                  )}
                 </div>
               </Card>
             );
           })
         )}
       </div>
+      <Pagination page={safePage} totalPages={totalPages} onChange={setPage} />
     </div>
   );
 }

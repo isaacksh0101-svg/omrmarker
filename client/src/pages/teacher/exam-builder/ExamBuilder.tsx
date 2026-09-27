@@ -81,7 +81,7 @@ export function ExamBuilder() {
     <div className="mx-auto max-w-3xl px-6 py-12 pb-24">
       <button
         className="text-xs font-bold text-ink-soft transition-colors duration-150 hover:text-accent"
-        onClick={() => navigate('/')}
+        onClick={() => navigate('/exam-management')}
       >
         ← 시험지 관리
       </button>

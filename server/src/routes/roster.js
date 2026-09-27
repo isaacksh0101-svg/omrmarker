@@ -35,7 +35,7 @@ rosterRouter.delete('/:rollNumber', async (req, res) => {
 rosterRouter.delete('/:rollNumber/learning-data', async (req, res) => {
   const rollNumber = Number(req.params.rollNumber);
   if (!Number.isInteger(rollNumber) || rollNumber <= 0) {
-    return res.status(400).json({ error: '올바른 출석번호가 필요합니다.' });
+    return res.status(400).json({ error: '올바른 번호가 필요합니다.' });
   }
   const deletedSessions = await repo.deleteLearningDataForRollNumber(rollNumber);
   res.json({ ok: true, deletedSessions });
@@ -44,4 +44,20 @@ rosterRouter.delete('/:rollNumber/learning-data', async (req, res) => {
 // 학생별 리포트에서 "이 학생이 응시한 시험들" 목록을 보여주기 위함.
 rosterRouter.get('/:rollNumber/exams', async (req, res) => {
   res.json(await repo.getExamsForRollNumber(Number(req.params.rollNumber)));
+});
+
+rosterRouter.get('/:rollNumber/incomplete-reviews', async (req, res) => {
+  res.json(await repo.getIncompleteReviewsForRollNumber(Number(req.params.rollNumber)));
+});
+
+rosterRouter.post('/:rollNumber/incomplete-reviews/recovery-code', async (req, res) => {
+  const result = await repo.issueAllReviewRecoveryCode(Number(req.params.rollNumber));
+  if (!result) return res.status(404).json({ error: '해당 학생의 미완료 재풀이가 없습니다.' });
+  res.json(result);
+});
+
+rosterRouter.post('/:rollNumber/incomplete-reviews/:assignmentId/recovery-code', async (req, res) => {
+  const result = await repo.issueReviewRecoveryCode(Number(req.params.assignmentId), Number(req.params.rollNumber));
+  if (!result) return res.status(404).json({ error: '해당 학생의 미완료 재풀이를 찾을 수 없습니다.' });
+  res.json(result);
 });

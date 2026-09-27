@@ -27,6 +27,14 @@ standardsRouter.get('/trend', async (req, res) => {
   res.json(await repo.computeStandardsTrend({ subjectId, code, rollNumber, from, to }));
 });
 
+// 여러 시험에 걸쳐 반복되는 성취기준별 약점/개선 패턴(학생별 리포트 전용) - roll_number 필수.
+standardsRouter.get('/weakness-patterns', async (req, res) => {
+  const rollNumber = req.query.roll_number ? Number(req.query.roll_number) : undefined;
+  if (!rollNumber) return res.status(400).json({ error: 'roll_number가 필요합니다.' });
+  const { subject_id: subjectId, from, to } = req.query;
+  res.json(await repo.computeStandardWeaknessCandidates({ rollNumber, subjectId, from, to }));
+});
+
 standardsRouter.get('/', (req, res) => {
   const { subject_id, grade_cluster } = req.query;
   res.json(filterStandards({ subject_id, grade_cluster }));

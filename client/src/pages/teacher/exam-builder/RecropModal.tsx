@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { api, ApiError } from '../../../api/client';
@@ -15,6 +16,11 @@ interface Props {
   questionId: number;
   onClose: () => void;
   onDone: () => void;
+  // 'append'면 새로 고른 영역을 기존 문항 이미지 위에 이어붙여 한 장으로 합친다(예: 국어
+  // 지문처럼 문항 자체엔 없지만 학생에게 같이 보여줘야 하는 내용을 추가할 때). 기본은
+  // 기존처럼 통째로 교체하는 'replace'.
+  mode?: 'replace' | 'append';
+  existingImagePath?: string | null;
 }
 
 interface Rect {
@@ -24,11 +30,18 @@ interface Rect {
   h: number;
 }
 
-// AI가 자동으로 잘라준 문항 이미지가 잘못됐을 때 쓰는 수동 재크롭 도구. 교사가 자신의
-// 컴퓨터에서 원본 PDF/이미지를 다시 골라(서버에는 전혀 올라가지 않는다) 브라우저 안에서만
-// 렌더링하고, 마우스로 영역을 드래그해 고른 뒤 그 부분만 잘라 서버로 올린다. 그래서 서버가
-// 시험지 원본 이미지를 따로 보관해둘 필요가 없다.
-export function RecropModal({ examId, questionId, onClose, onDone }: Props) {
+function loadImageElement(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('기존 문항 이미지를 불러올 수 없습니다.'));
+    img.src = src;
+  });
+}
+
+// AI가 자동으로 잘라준 문항 이미지가 잘못됐을 때 쓰는 수동 재크롭 도구. AI 분석 당시
+// 저장한 원본 페이지를 자동으로 불러오고, 예전 시험처럼 원본이 없을 때만 파일을 다시 고른다.
+export function RecropModal({ examId, questionId, onClose, onDone, mode = 'replace', existingImagePath }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -42,6 +55,8 @@ export function RecropModal({ examId, questionId, onClose, onDone }: Props) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasImage, setHasImage] = useState(false);
+  const [loadingSource, setLoadingSource] = useState(true);
+  const [hasSavedSource, setHasSavedSource] = useState(false);
 
   async function renderPdfPage(doc: pdfjsLib.PDFDocumentProxy, n: number) {
     const canvas = canvasRef.current;
@@ -62,7 +77,7 @@ export function RecropModal({ examId, questionId, onClose, onDone }: Props) {
     }
   }
 
-  function renderImageFile(file: File) {
+  function renderImageBlob(file: Blob) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const img = new Image();
@@ -99,9 +114,32 @@ export function RecropModal({ examId, questionId, onClose, onDone }: Props) {
     } else {
       setPageCount(1);
       setPageIndex(1);
-      renderImageFile(file);
+      renderImageBlob(file);
     }
   }
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSavedSource() {
+      try {
+        const response = await fetch(`/api/exams/${examId}/questions/${questionId}/source-image`);
+        if (!response.ok) return;
+        const blob = await response.blob();
+        if (cancelled) return;
+        setHasSavedSource(true);
+        renderImageBlob(blob);
+      } catch {
+        // 이전 버전에서 만든 문항은 원본이 없을 수 있으므로 파일 선택 방식으로 자연스럽게 폴백한다.
+      } finally {
+        if (!cancelled) setLoadingSource(false);
+      }
+    }
+    loadSavedSource();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [examId, questionId]);
 
   useEffect(() => {
     if (pdfDoc) renderPdfPage(pdfDoc, pageIndex);
@@ -150,12 +188,12 @@ export function RecropModal({ examId, questionId, onClose, onDone }: Props) {
     setUploading(true);
     setError(null);
     try {
-      const out = document.createElement('canvas');
-      out.width = Math.round(selection.w);
-      out.height = Math.round(selection.h);
-      const ctx = out.getContext('2d');
-      if (!ctx) throw new Error('캔버스를 만들 수 없습니다.');
-      ctx.drawImage(
+      const cropped = document.createElement('canvas');
+      cropped.width = Math.round(selection.w);
+      cropped.height = Math.round(selection.h);
+      const croppedCtx = cropped.getContext('2d');
+      if (!croppedCtx) throw new Error('캔버스를 만들 수 없습니다.');
+      croppedCtx.drawImage(
         canvas,
         selection.x,
         selection.y,
@@ -163,9 +201,26 @@ export function RecropModal({ examId, questionId, onClose, onDone }: Props) {
         selection.h,
         0,
         0,
-        out.width,
-        out.height,
+        cropped.width,
+        cropped.height,
       );
+
+      let out = cropped;
+      if (mode === 'append' && existingImagePath) {
+        // 새로 고른 영역(지문 등)을 위에, 기존 문항 이미지를 아래에 이어붙여 한 장으로 합친다.
+        const existingImg = await loadImageElement(`/uploads/${existingImagePath}`);
+        const combined = document.createElement('canvas');
+        combined.width = Math.max(cropped.width, existingImg.naturalWidth);
+        combined.height = cropped.height + existingImg.naturalHeight;
+        const combinedCtx = combined.getContext('2d');
+        if (!combinedCtx) throw new Error('캔버스를 만들 수 없습니다.');
+        combinedCtx.fillStyle = '#ffffff';
+        combinedCtx.fillRect(0, 0, combined.width, combined.height);
+        combinedCtx.drawImage(cropped, 0, 0);
+        combinedCtx.drawImage(existingImg, 0, cropped.height);
+        out = combined;
+      }
+
       const blob: Blob | null = await new Promise((resolve) => out.toBlob(resolve, 'image/png'));
       if (!blob) throw new Error('이미지를 만들 수 없습니다.');
 
@@ -174,13 +229,17 @@ export function RecropModal({ examId, questionId, onClose, onDone }: Props) {
       await api.postForm(`/exams/${examId}/questions/${questionId}/prompt-image`, formData);
       onDone();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : '이미지를 자르는 중 오류가 발생했습니다.');
+      setError(err instanceof ApiError ? err.message : '이미지를 처리하는 중 오류가 발생했습니다.');
     } finally {
       setUploading(false);
     }
   }
 
-  return (
+  return createPortal(
+    // Card 등 조상 요소에 backdrop-blur(=backdrop-filter)가 있으면 CSS 스펙상 그 요소가
+    // position:fixed 자손의 containing block이 되어버려서, 이 모달이 뷰포트가 아니라
+    // 그 조상 박스 기준으로 배치된다. 문항 목록처럼 긴 카드 안에서 열면 화면 밖으로 잘려
+    // 보이는 문제가 있어 body에 포털로 붙여 항상 뷰포트 기준으로 뜨게 한다.
     <div
       className="animate-overlay-in fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
       onClick={onClose}
@@ -190,16 +249,21 @@ export function RecropModal({ examId, questionId, onClose, onDone }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-line px-5 py-4">
-          <h2 className="text-sm font-bold text-ink">문항 이미지 다시 자르기</h2>
+          <h2 className="text-sm font-bold text-ink">
+            {mode === 'append' ? '추가 정보 크롭하기' : '문항 이미지 다시 자르기'}
+          </h2>
           <button className="text-xs text-ink-soft hover:text-danger" onClick={onClose}>
             닫기
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           <p className="text-xs text-ink-soft">
-            이 문항의 원본이 담긴 PDF나 이미지 파일을 다시 선택하세요. 파일은 서버로 전송되지
-            않고 이 화면 안에서만 열리며, 영역을 잘라낸 결과 이미지만 저장됩니다.
+            {loadingSource
+              ? 'AI 분석에 사용한 원본 페이지를 불러오는 중입니다.'
+              : hasSavedSource
+                ? 'AI 분석에 사용한 원본 페이지입니다. 문항 영역을 바로 선택하세요.'
+                : '이전 버전에서 만든 문항이라 저장된 원본이 없습니다. 원본 PDF나 이미지를 선택하세요.'}
           </p>
           <div className="mt-3 flex items-center gap-2">
             <input
@@ -211,7 +275,7 @@ export function RecropModal({ examId, questionId, onClose, onDone }: Props) {
               id="recrop-file-input"
             />
             <Button variant="secondary" onClick={() => fileInputRef.current?.click()}>
-              파일 선택
+              {hasSavedSource ? '다른 파일 선택' : '파일 선택'}
             </Button>
             {pdfDoc && pageCount > 1 && (
               <div className="flex items-center gap-2 text-xs text-ink-soft">
@@ -256,12 +320,16 @@ export function RecropModal({ examId, questionId, onClose, onDone }: Props) {
               />
             )}
             {!hasImage && (
-              <p className="p-6 text-center text-xs text-ink-soft">파일을 선택하면 여기 미리보기가 표시됩니다.</p>
+              <p className="p-6 text-center text-xs text-ink-soft">
+                {loadingSource ? '원본 페이지를 불러오는 중...' : '파일을 선택하면 여기 미리보기가 표시됩니다.'}
+              </p>
             )}
           </div>
           {hasImage && (
             <p className="mt-1 text-[11px] text-ink-soft">
-              문항 전체(객관식이면 보기 포함)를 감싸도록 마우스로 드래그해서 영역을 고르세요.
+              {mode === 'append'
+                ? '지문 등 문항에 함께 보여줄 영역을 마우스로 드래그해서 고르세요. 선택한 영역이 기존 문항 이미지 위에 이어붙습니다.'
+                : '문항 전체(객관식이면 보기 포함)를 감싸도록 마우스로 드래그해서 영역을 고르세요.'}
             </p>
           )}
 
@@ -276,10 +344,11 @@ export function RecropModal({ examId, questionId, onClose, onDone }: Props) {
             disabled={!selection || selection.w < 5 || selection.h < 5 || uploading}
             onClick={applyCrop}
           >
-            {uploading ? '저장 중...' : '이 영역으로 자르기'}
+            {uploading ? '저장 중...' : mode === 'append' ? '이 영역 추가하기' : '이 영역으로 자르기'}
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

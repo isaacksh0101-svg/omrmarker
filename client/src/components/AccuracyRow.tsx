@@ -1,13 +1,35 @@
+interface InsightBadge {
+  text: string;
+  title?: string;
+}
+
 interface Props {
   label: string;
   sublabel?: string;
   extra?: string;
+  metric?: string;
+  metricLabel?: string;
+  metricDetail?: string;
+  countLabel?: string;
+  insights?: InsightBadge[];
   correct: number;
   total: number;
   onClick?: () => void;
 }
 
-export function AccuracyRow({ label, sublabel, extra, correct, total, onClick }: Props) {
+export function AccuracyRow({
+  label,
+  sublabel,
+  extra,
+  metric,
+  metricLabel = '평균 시간',
+  metricDetail,
+  countLabel,
+  insights = [],
+  correct,
+  total,
+  onClick,
+}: Props) {
   const pct = total > 0 ? Math.round((correct / total) * 100) : 0;
 
   return (
@@ -25,9 +47,31 @@ export function AccuracyRow({ label, sublabel, extra, correct, total, onClick }:
             {extra && <span className="shrink-0">· {extra}</span>}
           </p>
         )}
+        {insights.length > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {insights.map((insight) => (
+              <span
+                key={insight.text}
+                title={insight.title}
+                className={`rounded-full bg-warn/15 px-2 py-0.5 text-[10px] font-bold text-warn ${
+                  insight.title ? 'cursor-help' : ''
+                }`}
+              >
+                {insight.text}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
+      {metric && (
+        <div className="w-20 shrink-0 text-right">
+          <p className="text-[10px] font-bold text-ink-soft">{metricLabel}</p>
+          <p className="mt-0.5 text-sm font-bold text-ink">{metric}</p>
+          {metricDetail && <p className="mt-0.5 text-[10px] text-ink-soft">{metricDetail}</p>}
+        </div>
+      )}
       <span className="w-16 shrink-0 text-right text-xs text-ink-soft">
-        {correct}/{total}문제
+        {countLabel ?? `${correct}/${total}문제`}
       </span>
       <div className="h-2 w-28 shrink-0 overflow-hidden rounded-full bg-line">
         <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />

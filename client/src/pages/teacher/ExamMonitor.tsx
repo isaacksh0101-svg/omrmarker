@@ -192,7 +192,18 @@ export function ExamMonitor() {
   const [viewingSessionId, setViewingSessionId] = useState<number | null>(null);
   const [pulse, setPulse] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [codeCopied, setCodeCopied] = useState(false);
   const pulseTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  async function copyCode(code: string) {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCodeCopied(true);
+      setTimeout(() => setCodeCopied(false), 1500);
+    } catch {
+      alert('복사하지 못했습니다. 코드를 직접 선택해 복사해주세요.');
+    }
+  }
 
   const load = useCallback(() => {
     api
@@ -297,8 +308,8 @@ export function ExamMonitor() {
     const message = alreadyStarted
       ? `아직 대기 중인 학생 ${waitingCount}명을 지금 시작할까요?`
       : waitingCount > 0
-        ? `접속 학생을 확인해주세요.\n\n${rolls}\n\n총 ${waitingCount}명이 맞으면 시험을 시작합니다. 시작과 동시에 신규 입장이 마감됩니다.`
-        : '현재 접속한 학생이 없습니다. 그래도 시험을 시작할까요? 시작과 동시에 신규 입장이 마감됩니다.';
+        ? `접속 학생을 확인해주세요.\n\n${rolls}\n\n총 ${waitingCount}명이 맞으면 시험을 시작합니다. 늦게 들어온 학생은 입장 코드 확인 후 즉시 시작됩니다.`
+        : '현재 접속한 학생이 없습니다. 그래도 시험을 시작할까요? 이후 입장 코드를 입력한 학생은 즉시 시작됩니다.';
     if (!confirm(message)) return;
     try {
       await api.post(`/exams/${examId}/start`);
@@ -316,7 +327,7 @@ export function ExamMonitor() {
     if (!confirm(message)) return;
     try {
       await api.post(`/exams/${examId}/end-all`);
-      load();
+      navigate('/exam-monitor');
     } catch (err) {
       alert(err instanceof ApiError ? err.message : '종료 중 오류가 발생했습니다.');
     }
@@ -393,6 +404,22 @@ export function ExamMonitor() {
           <Badge tone="good">감독중</Badge>
         ) : (
           <Badge tone="neutral">학생 입장 대기 중</Badge>
+        )}
+
+        {data.exam.admission_code && (
+          <div className="flex items-center gap-1.5 rounded-full border border-line px-3 py-1">
+            <span className="text-[11px] font-bold text-ink-soft">입장 코드</span>
+            <span className="font-mono text-sm font-black tracking-[0.18em] text-accent-ink">
+              {data.exam.admission_code}
+            </span>
+            <button
+              type="button"
+              className="text-[11px] font-bold text-accent"
+              onClick={() => copyCode(data.exam.admission_code!)}
+            >
+              {codeCopied ? '복사됨!' : '복사'}
+            </button>
+          </div>
         )}
 
         <div className="ml-auto flex items-center gap-2">

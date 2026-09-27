@@ -9,10 +9,21 @@ const toneClass: Record<Tone, string> = {
   danger: 'bg-danger/15 text-danger',
 };
 
-export function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: Tone }) {
+export function Badge({
+  children,
+  tone = 'neutral',
+  title,
+}: {
+  children: ReactNode;
+  tone?: Tone;
+  title?: string;
+}) {
   return (
     <span
-      className={`whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-bold transition-colors duration-200 ${toneClass[tone]}`}
+      title={title}
+      className={`whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-bold transition-colors duration-200 ${toneClass[tone]} ${
+        title ? 'cursor-help' : ''
+      }`}
     >
       {children}
     </span>

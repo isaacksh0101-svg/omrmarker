@@ -11,7 +11,8 @@
     "dev:server": "npm run dev -w server",
     "dev:client": "npm run dev -w client",
     "build": "npm run build -w client",
-    "start": "npm run build && npm run start -w server"
+    "start": "npm run build && npm run start -w server",
+    "package:windows": "npm --prefix electron run dist"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

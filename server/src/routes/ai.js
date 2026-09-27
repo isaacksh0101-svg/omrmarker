@@ -1,24 +1,75 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { Router } from 'express';
+import { config } from '../config.js';
 import * as repo from '../db/repo.js';
 import { upload } from '../middleware/upload.js';
-import { extractAnswerKeyFromImage, extractQuestionsFromImage } from '../services/aiExtraction.js';
+import {
+  extractAnswerKeyFromDocumentText,
+  extractAnswerKeyFromImage,
+  extractQuestionsFromDocumentText,
+  extractQuestionsFromImage,
+} from '../services/aiExtraction.js';
 import { cropQuestionImages } from '../services/cropQuestionImages.js';
+import { prepareAiImage } from '../services/prepareAiImage.js';
 import { renderPdfToImages } from '../services/renderPdfPages.js';
 import { requireAuth } from '../middleware/auth.js';
+import { parseDocumentWithUpstage } from '../services/upstageDocumentParse.js';
 
 export const aiRouter = Router();
 
+const SOURCE_EXTENSION = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+};
+
+function saveSourcePage(examId, imageBuffer, mimeType) {
+  const extension = SOURCE_EXTENSION[mimeType] || 'png';
+  const relativeDir = path.join('sources', String(examId));
+  const filename = `${crypto.randomUUID()}.${extension}`;
+  const absoluteDir = path.join(config.uploadsDir, relativeDir);
+  fs.mkdirSync(absoluteDir, { recursive: true });
+  fs.writeFileSync(path.join(absoluteDir, filename), imageBuffer);
+  return path.join(relativeDir, filename).replaceAll('\\', '/');
+}
+
 // 이미지 한 장(래스터 또는 PDF 한 쪽을 렌더링한 PNG)에 대해 AI 추출 + 발문 이미지 자르기를
 // 수행한다. PDF는 여러 쪽일 수 있어 이 함수를 쪽마다 반복 호출한다.
-async function extractFromSingleImage(imageBuffer, mimeType, exam, orderOffset) {
+async function extractFromSingleImage(imageBuffer, mimeType, exam, orderOffset, sourceImagePath, documentText = '') {
+  const aiImage = await prepareAiImage(imageBuffer, mimeType);
   const extracted = await extractQuestionsFromImage({
-    imageBase64: imageBuffer.toString('base64'),
-    mimeType,
+    imageBase64: aiImage.buffer.toString('base64'),
+    mimeType: aiImage.mimeType,
+    subjectId: exam.subject_id,
+    gradeCluster: exam.grade_cluster,
+    documentText,
+  });
+  const withImages = await cropQuestionImages(imageBuffer, mimeType, extracted.questions);
+  return withImages.map((q, i) => ({
+    ...q,
+    order_index: orderOffset + i,
+    source_image_path: sourceImagePath,
+  }));
+}
+
+// Upstage 경로는 이미지를 자동으로 자르지 않는다 - Solar Pro는 텍스트만 보므로 어떤
+// 방식으로도 정확한 문항 영역을 알아낼 수 없다. 대신 문항 내용을 전부 텍스트(수식 포함)로
+// 옮겨 적고, 도형·표·그래프처럼 텍스트로 옮기기 어려운 문항만 교사가 문항 편집 화면에서
+// "+ 원본에서 이미지 잘라오기"로 수동으로 채운다(source_image_path에 저장해 둔 원본
+// 페이지를 그대로 쓴다).
+async function extractFromUpstageDocument(parsedDocument, exam, orderOffset, sourceImagePath) {
+  const extracted = await extractQuestionsFromDocumentText({
+    documentText: parsedDocument.text,
     subjectId: exam.subject_id,
     gradeCluster: exam.grade_cluster,
   });
-  const withImages = await cropQuestionImages(imageBuffer, mimeType, extracted.questions);
-  return withImages.map((q, i) => ({ ...q, order_index: orderOffset + i }));
+  return extracted.questions.map((question, index) => ({
+    ...question,
+    order_index: orderOffset + index,
+    source_image_path: sourceImagePath,
+  }));
 }
 
 aiRouter.post('/:id/ai-extract', requireAuth, upload.single('file'), async (req, res) => {
@@ -29,17 +80,30 @@ aiRouter.post('/:id/ai-extract', requireAuth, upload.single('file'), async (req,
 
   let allQuestions;
   try {
+    const useUpstage = req.body?.provider === 'upstage';
+    const parsedDocument = useUpstage && req.file.mimetype !== 'application/pdf'
+      ? await parseDocumentWithUpstage(req.file.buffer, req.file.mimetype, req.file.originalname)
+      : null;
     if (req.file.mimetype === 'application/pdf') {
       // PDF는 원본에서 바로 잘라낼 수 없으니(래스터화 라이브러리가 없으면), 먼저 쪽마다
       // PNG로 렌더링해서 그 뒤로는 이미지 업로드와 완전히 같은 경로를 태운다.
       const pageImages = await renderPdfToImages(req.file.buffer);
       allQuestions = [];
-      for (const pageImage of pageImages) {
-        const pageQuestions = await extractFromSingleImage(pageImage, 'image/png', exam, allQuestions.length);
+      for (const [pageIndex, pageImage] of pageImages.entries()) {
+        const sourceImagePath = saveSourcePage(examId, pageImage, 'image/png');
+        const pageDocument = useUpstage
+          ? await parseDocumentWithUpstage(pageImage, 'image/png', `${req.file.originalname}-page-${pageIndex + 1}.png`)
+          : '';
+        const pageQuestions = useUpstage
+          ? await extractFromUpstageDocument(pageDocument, exam, allQuestions.length, sourceImagePath)
+          : await extractFromSingleImage(pageImage, 'image/png', exam, allQuestions.length, sourceImagePath);
         allQuestions = allQuestions.concat(pageQuestions);
       }
     } else {
-      allQuestions = await extractFromSingleImage(req.file.buffer, req.file.mimetype, exam, 0);
+      const sourceImagePath = saveSourcePage(examId, req.file.buffer, req.file.mimetype);
+      allQuestions = useUpstage
+        ? await extractFromUpstageDocument(parsedDocument, exam, 0, sourceImagePath)
+        : await extractFromSingleImage(req.file.buffer, req.file.mimetype, exam, 0, sourceImagePath);
     }
   } catch (e) {
     return res.status(502).json({ error: `AI 추출 실패: ${e.message}` });
@@ -53,11 +117,17 @@ aiRouter.post('/:id/ai-extract', requireAuth, upload.single('file'), async (req,
 // 생성(위 ai-extract)과는 별도 경로 - 문제지와 정답지가 따로 오는 경우가 흔하기 때문이다.
 // 이미지 한 장에 대해 AI 추출을 수행한다. PDF는 여러 쪽일 수 있어 쪽마다 반복 호출한다.
 async function extractAnswersFromSingleImage(imageBuffer, mimeType, questionInfos) {
+  const aiImage = await prepareAiImage(imageBuffer, mimeType);
   return extractAnswerKeyFromImage({
-    imageBase64: imageBuffer.toString('base64'),
-    mimeType,
+    imageBase64: aiImage.buffer.toString('base64'),
+    mimeType: aiImage.mimeType,
     questions: questionInfos,
   });
+}
+
+async function extractAnswersFromUpstageDocument(imageBuffer, mimeType, filename, questionInfos) {
+  const parsedDocument = await parseDocumentWithUpstage(imageBuffer, mimeType, filename);
+  return extractAnswerKeyFromDocumentText({ documentText: parsedDocument.text, questions: questionInfos });
 }
 
 aiRouter.post('/:id/ai-extract-answers', requireAuth, upload.single('file'), async (req, res) => {
@@ -77,15 +147,25 @@ aiRouter.post('/:id/ai-extract-answers', requireAuth, upload.single('file'), asy
 
   let extractedAnswers;
   try {
+    const useUpstage = req.body?.provider === 'upstage';
     if (req.file.mimetype === 'application/pdf') {
       const pageImages = await renderPdfToImages(req.file.buffer);
       extractedAnswers = [];
-      for (const pageImage of pageImages) {
-        const pageAnswers = await extractAnswersFromSingleImage(pageImage, 'image/png', questionInfos);
+      for (const [pageIndex, pageImage] of pageImages.entries()) {
+        const pageAnswers = useUpstage
+          ? await extractAnswersFromUpstageDocument(
+              pageImage,
+              'image/png',
+              `${req.file.originalname}-page-${pageIndex + 1}.png`,
+              questionInfos,
+            )
+          : await extractAnswersFromSingleImage(pageImage, 'image/png', questionInfos);
         extractedAnswers = extractedAnswers.concat(pageAnswers);
       }
     } else {
-      extractedAnswers = await extractAnswersFromSingleImage(req.file.buffer, req.file.mimetype, questionInfos);
+      extractedAnswers = useUpstage
+        ? await extractAnswersFromUpstageDocument(req.file.buffer, req.file.mimetype, req.file.originalname, questionInfos)
+        : await extractAnswersFromSingleImage(req.file.buffer, req.file.mimetype, questionInfos);
     }
   } catch (e) {
     return res.status(502).json({ error: `AI 추출 실패: ${e.message}` });

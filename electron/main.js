@@ -19,17 +19,42 @@ const { spawn, spawnSync } = require('child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
+const net = require('node:net');
 const path = require('node:path');
 
-const PORT = 4000;
-const HEALTH_URL = `http://localhost:${PORT}/api/health`;
+const PREFERRED_PORT = 4000;
 
 let serverProcess = null;
 let mainWindow = null;
 let stoppingServer = false;
 let recentServerOutput = [];
 let activeDataDir = null;
+let activePort = PREFERRED_PORT;
 const setupToken = crypto.randomBytes(32).toString('base64url');
+
+function findAvailablePort(preferredPort = PREFERRED_PORT) {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.unref();
+    probe.once('error', (error) => {
+      if (error.code !== 'EADDRINUSE' && error.code !== 'EACCES') {
+        reject(error);
+        return;
+      }
+      const fallback = net.createServer();
+      fallback.unref();
+      fallback.once('error', reject);
+      fallback.listen(0, '0.0.0.0', () => {
+        const address = fallback.address();
+        const port = typeof address === 'object' && address ? address.port : null;
+        fallback.close(() => port ? resolve(port) : reject(new Error('사용 가능한 포트를 찾지 못했습니다.')));
+      });
+    });
+    probe.listen(preferredPort, '0.0.0.0', () => {
+      probe.close(() => resolve(preferredPort));
+    });
+  });
+}
 
 function storageLocationConfigPath() {
   return path.join(app.getPath('userData'), 'storage-location.json');
@@ -136,7 +161,7 @@ function startServer() {
     cwd: path.dirname(entry),
     env: {
       ...process.env,
-      PORT: String(PORT),
+      PORT: String(activePort),
       // 설치 폴더는 쓰기 권한이 없을 수 있으니, 실제 시험지/응시 데이터는 사용자별
       // 데이터 폴더(Windows면 %APPDATA%\ScoreLab)에 저장한다.
       SCORELAB_DATA_DIR: activeDataDir || defaultDataDir(),
@@ -153,7 +178,7 @@ function startServer() {
 
   serverProcess.on('exit', (code) => {
     serverProcess = null;
-    // 창이 아직 떠 있는데 서버가 먼저 죽으면(예: 다른 프로그램이 4000번 포트를 막 차지함)
+    // 창이 아직 떠 있는데 서버가 먼저 죽으면 원인을 바로 알려준다.
     // 이유를 알 수 없는 빈 화면만 보이게 되므로 바로 알려준다.
     if (!stoppingServer && mainWindow && code !== 0) {
       const detail = recentServerOutput.length > 0
@@ -187,7 +212,7 @@ function stopServer() {
 function waitForServer(deadline) {
   return new Promise((resolve, reject) => {
     const attempt = () => {
-      const req = http.get(HEALTH_URL, (res) => {
+      const req = http.get(`http://localhost:${activePort}/api/health`, (res) => {
         res.resume();
         if (res.statusCode === 200) return resolve();
         retry();
@@ -212,6 +237,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     title: 'ScoreLab',
+    icon: path.join(__dirname, 'build', 'icon.png'),
     backgroundColor: '#f7f8fb',
     autoHideMenuBar: true,
     menuBarVisible: false,
@@ -220,7 +246,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
     },
   });
-  mainWindow.loadURL(`http://localhost:${PORT}`);
+  mainWindow.loadURL(`http://localhost:${activePort}`);
   // 환경설정 화면의 "API 키 발급받기" 같은 외부 링크(target=_blank)는 Electron 창을 새로
   // 띄우는 대신 시스템 기본 브라우저로 열어야 한다 - 기본 동작(거부)로 두면 그냥 아무 일도
   // 안 일어난다.
@@ -325,6 +351,7 @@ if (!gotLock) {
     }
 
     activeDataDir = await selectInitialDataDir();
+    activePort = await findAvailablePort();
     startServer();
     try {
       await waitForServer(Date.now() + 60_000);

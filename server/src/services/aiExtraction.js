@@ -1,5 +1,5 @@
 import { filterStandards } from './curriculumStandards.js';
-import { getGeminiApiKey, getGeminiModel } from './appSettings.js';
+import { getGeminiApiKey, getGeminiModel, getUpstageApiKey } from './appSettings.js';
 
 // AI(현재는 Gemini) 호출은 이 파일에서만 일어난다. 이 앱에서 유일하게 외부 네트워크를
 // 사용하는 지점이며, provider를 바꾸고 싶으면 이 파일의 callGemini()만 교체하면 된다.
@@ -61,7 +61,7 @@ function buildResponseSchema(allowedCodes) {
   };
 }
 
-function buildPrompt(gradeLabel, subjectName, candidateStandards) {
+function buildPrompt(gradeLabel, subjectName, candidateStandards, documentText = '') {
   // 코드만 나열하면 모델이 "6수01-01" 같은 코드가 실제로 뭘 말하는지 모른 채(자기가 학습 때 본 것에
   // 기대어) 찍는 경우가 있었다(예: 분수 나눗셈 문제에 각기둥 성취기준을 고르는 식). 그래서 각 코드가
   // 무슨 내용인지 여기서 직접 알려주고, 반드시 그 내용을 문제와 비교해서 고르라고 명시한다.
@@ -102,6 +102,8 @@ function buildPrompt(gradeLabel, subjectName, candidateStandards) {
 
 성취기준 목록(코드: 내용):
 ${standardsList}
+
+${documentText ? `Upstage Document Parse가 먼저 판독한 문서 내용입니다. 이미지 판독 시 번호·문장·수식을 교차 확인하는 참고자료로 사용하세요:\n\n${documentText}` : ''}
 
 **중요: 정답이 무엇인지는 절대 판단하거나 표시하지 마세요.** 정답 확정은 교사가 직접 합니다.
 당신의 역할은 문항 지시문을 옮겨 적고, 영역을 표시하고, 성취기준을 제안하는 것까지입니다.`;
@@ -175,7 +177,7 @@ function buildAnswerKeySchema() {
   };
 }
 
-function buildAnswerKeyPrompt(questions) {
+function buildAnswerKeyPrompt(questions, { sourceLabel, documentText } = {}) {
   const list = questions
     .map((q) =>
       q.type === 'mc'
@@ -184,23 +186,23 @@ function buildAnswerKeyPrompt(questions) {
     )
     .join('\n');
 
-  return `당신은 초등학교 시험 정답지(답안지) 이미지를 읽어 문항 번호별 정답을 추출하는 보조 도구입니다.
+  return `당신은 초등학교 시험 정답지(답안지)를 읽어 문항 번호별 정답을 추출하는 보조 도구입니다.
 
 이 시험은 다음 문항들로 구성되어 있습니다:
 ${list}
 
-이미지에 있는 정답지를 읽고, 각 문항 번호에 대한 정답을 추출하세요.
+${sourceLabel}, 각 문항 번호에 대한 정답을 추출하세요.
 - 객관식 문항은 정답 보기의 번호만 숫자로 적으세요. ①②③④⑤처럼 동그라미 숫자로 표시돼 있어도 해당하는
   아라비아 숫자(1~보기 개수)로 바꿔 적으세요.
 - 단답형 문항은 정답으로 적힌 텍스트를 그대로 옮겨 적으세요. 정답이 여러 개 인정되는 경우(예: "5 또는
   5개")는 쉼표로 구분해서 적으세요.
-- 문항 번호는 반드시 위 목록의 번호와 일치시키세요. 이미지에서 실제로 읽을 수 있는 문항만 결과에
-  포함하고, 흐릿하거나 확실하지 않은 문항은 억지로 추측해서 넣지 말고 빼세요.
-- 정답 이외의 해설이나 다른 정보는 옮기지 마세요.`;
+- 문항 번호는 반드시 위 목록의 번호와 일치시키세요. 실제로 읽을 수 있는 문항만 결과에 포함하고,
+  흐릿하거나 확실하지 않은 문항은 억지로 추측해서 넣지 말고 빼세요.
+- 정답 이외의 해설이나 다른 정보는 옮기지 마세요.${documentText ? `\n\n판독 문서:\n${documentText}` : ''}`;
 }
 
 export async function extractAnswerKeyFromImage({ imageBase64, mimeType, questions }) {
-  const promptText = buildAnswerKeyPrompt(questions);
+  const promptText = buildAnswerKeyPrompt(questions, { sourceLabel: '이미지에 있는 정답지를 읽고' });
   const responseSchema = buildAnswerKeySchema();
 
   const result = await callGemini({ imageBase64, mimeType, promptText, responseSchema });
@@ -210,7 +212,66 @@ export async function extractAnswerKeyFromImage({ imageBase64, mimeType, questio
     .map((a) => ({ question_number: a.question_number, answer: a.answer.trim() }));
 }
 
-export async function extractQuestionsFromImage({ imageBase64, mimeType, subjectId, gradeCluster }) {
+export async function extractAnswerKeyFromDocumentText({ documentText, questions }) {
+  const apiKey = getUpstageApiKey();
+  if (!apiKey) throw new Error('환경설정에서 Upstage API 키를 먼저 저장해주세요.');
+
+  const promptText = buildAnswerKeyPrompt(questions, {
+    sourceLabel: '아래 판독 문서를 보고',
+    documentText,
+  });
+
+  const response = await fetch('https://api.upstage.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'solar-pro3',
+      reasoning_effort: 'medium',
+      messages: [{ role: 'user', content: promptText }],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'scorelab_answer_key',
+          strict: true,
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              answers: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    question_number: { type: 'integer' },
+                    answer: { type: 'string' },
+                  },
+                  required: ['question_number', 'answer'],
+                },
+              },
+            },
+            required: ['answers'],
+          },
+        },
+      },
+      temperature: 0.1,
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Solar Pro 3 오류 (${response.status}): ${detail}`);
+  }
+  const payload = await response.json();
+  const content = payload?.choices?.[0]?.message?.content;
+  if (!content) throw new Error('Solar Pro 3 응답에서 결과를 찾을 수 없습니다.');
+  const result = JSON.parse(content);
+
+  return (result.answers ?? [])
+    .filter((a) => Number.isInteger(a?.question_number) && typeof a?.answer === 'string' && a.answer.trim())
+    .map((a) => ({ question_number: a.question_number, answer: a.answer.trim() }));
+}
+
+export async function extractQuestionsFromImage({ imageBase64, mimeType, subjectId, gradeCluster, documentText = '' }) {
   const candidateStandards = filterStandards({ subject_id: subjectId, grade_cluster: gradeCluster });
   if (candidateStandards.length === 0) {
     throw new Error('해당 교과/학년군에 대한 성취기준을 찾을 수 없습니다.');
@@ -219,7 +280,7 @@ export async function extractQuestionsFromImage({ imageBase64, mimeType, subject
   const gradeLabel = candidateStandards[0].grade_label;
   const subjectName = candidateStandards[0].subject_name;
 
-  const promptText = buildPrompt(gradeLabel, subjectName, candidateStandards);
+  const promptText = buildPrompt(gradeLabel, subjectName, candidateStandards, documentText);
   const responseSchema = buildResponseSchema(allowedCodes);
 
   const result = await callGemini({ imageBase64, mimeType, promptText, responseSchema });
@@ -234,5 +295,116 @@ export async function extractQuestionsFromImage({ imageBase64, mimeType, subject
     suggested_standards: (q.suggested_standards ?? []).filter((s) => allowedSet.has(s.code)),
   }));
 
+  return { questions };
+}
+
+export async function extractQuestionsFromDocumentText({ documentText, subjectId, gradeCluster }) {
+  const candidateStandards = filterStandards({ subject_id: subjectId, grade_cluster: gradeCluster });
+  if (candidateStandards.length === 0) {
+    throw new Error('해당 교과/학년군에 대한 성취기준을 찾을 수 없습니다.');
+  }
+  const apiKey = getUpstageApiKey();
+  if (!apiKey) throw new Error('환경설정에서 Upstage API 키를 먼저 저장해주세요.');
+
+  const allowedCodes = candidateStandards.map((standard) => standard.code);
+  const standardsList = candidateStandards.map((standard) => `- ${standard.code}: ${standard.statement}`).join('\n');
+  const prompt = `당신은 초등학교 시험지를 ScoreLab 데이터로 변환하는 도구입니다.
+아래 문서는 Upstage Document Parse가 판독한 결과입니다. 제공된 JSON 스키마에 맞춰 반환하세요.
+
+각 문항에 대해 다음 필드를 만드세요.
+- order_index: 문서 안 순서를 0부터 센 정수
+- type: 객관식은 "mc", 단답형은 "short"
+- prompt: 문제 지시문과 본문을 판독 결과에 보이는 그대로 옮겨 적으세요. 객관식 보기
+  문구는 choices에 담고 여기엔 넣지 마세요.
+- choices: 객관식 보기의 실제 문구 배열(①②③④⑤ 등 번호는 빼고 내용만). 단답형은 빈 배열.
+- prompt와 choices 안의 **수식은 화면에 실제 분수·연산 기호로 보이도록 LaTeX로 적으세요.**
+  수식이 나오는 부분만 $...$로 감싸고 그 안에 LaTeX 문법을 씁니다. 분수는 "1/6"처럼
+  슬래시로 적지 말고 \\frac{1}{6}로, 대분수는 2\\frac{1}{3}로, 나눗셈은 \\div, 곱셈은
+  \\times로 적으세요. 예: "9/10 ÷ 3/10"은 "$\\frac{9}{10} \\div \\frac{3}{10}$"로 적습니다.
+  순수 정수·글·도형 기호는 $ 없이 그냥 텍스트로 둡니다.
+- 표·그림·선긋기처럼 판독 결과만으로는 정확히 옮기기 어려운 내용이 있으면, prompt에는
+  "(그림 있음 - 원본 확인 필요)"처럼 짧게 남겨두세요. 이 문항은 나중에 교사가 원본
+  이미지에서 직접 잘라 넣을 수 있습니다.
+- suggested_standards: 관련도순 2~3개. 각 항목은 code, confidence(high/medium/low), rationale
+
+목록에 없는 성취기준 코드는 절대 만들지 마세요. 정답은 판단하지 마세요.
+성취기준 목록:
+${standardsList}
+
+판독 문서:
+${documentText}`;
+
+  const response = await fetch('https://api.upstage.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'solar-pro3',
+      reasoning_effort: 'medium',
+      messages: [{ role: 'user', content: prompt }],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'scorelab_exam_questions',
+          strict: true,
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              questions: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    order_index: { type: 'integer' },
+                    type: { type: 'string', enum: ['mc', 'short'] },
+                    prompt: { type: 'string' },
+                    choices: { type: 'array', items: { type: 'string' } },
+                    suggested_standards: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                          code: { type: 'string', enum: allowedCodes },
+                          confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+                          rationale: { type: 'string' },
+                        },
+                        required: ['code', 'confidence', 'rationale'],
+                      },
+                    },
+                  },
+                  required: ['order_index', 'type', 'prompt', 'choices', 'suggested_standards'],
+                },
+              },
+            },
+            required: ['questions'],
+          },
+        },
+      },
+      temperature: 0.1,
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Solar Pro 3 오류 (${response.status}): ${detail}`);
+  }
+  const payload = await response.json();
+  const content = payload?.choices?.[0]?.message?.content;
+  if (!content) throw new Error('Solar Pro 3 응답에서 결과를 찾을 수 없습니다.');
+  const result = JSON.parse(content);
+  const allowedSet = new Set(allowedCodes);
+  const questions = (result.questions ?? []).map((question, index) => ({
+    order_index: Number.isInteger(question.order_index) ? question.order_index : index,
+    type: question.type === 'short' ? 'short' : 'mc',
+    prompt: typeof question.prompt === 'string' ? question.prompt : '',
+    choices: Array.isArray(question.choices)
+      ? question.choices.filter((choice) => typeof choice === 'string' && choice.trim()).map((choice) => choice.trim())
+      : [],
+    suggested_standards: (question.suggested_standards ?? []).filter((standard) => allowedSet.has(standard.code)),
+  }));
+  if (questions.length === 0) {
+    throw new Error('Solar Pro 3가 문항을 찾지 못했습니다. 원본이 선명한지 확인하거나 Gemini 직접 분석을 사용해주세요.');
+  }
   return { questions };
 }

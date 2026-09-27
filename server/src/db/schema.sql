@@ -17,12 +17,20 @@ CREATE TABLE IF NOT EXISTS exams (
   -- 제목은 자유롭게 두되, 쌓인 시험지 중에서 알아보기 위한 짧은 메모(교사만 봄,
   -- 학생에게는 노출 안 됨). 관리 화면에서만 채워 넣는다.
   memo TEXT,
+  -- 교사가 감독 대상으로 선택한 시각. 값이 있으면 감독 메인/학생 응시 목록에 노출된다.
+  supervised_at TEXT,
+  -- 여러 시험을 선택했을 때 학생이 이어서 응시할 순서. 종료 뒤에도 다음 시험 조회를
+  -- 위해 값은 보존하고 supervised_at만 비운다.
+  supervision_order INTEGER,
+  -- 감독 모드 동안 학생이 처음 입장할 때 쓰는 6자리 코드. 교사 전용 API에서만
+  -- 내려주며 시험 종료 시 즉시 비운다.
+  admission_code TEXT,
   started_at TEXT,
   -- 교사가 감독 화면에서 "시험 전체 종료"를 눌러 실제로 끝낸 시각. "시험 재시작"을
   -- 누르면 다시 NULL로 돌아간다 - 감독 화면이 대기중/감독중/종료됨을 구분하는 기준.
   ends_at TEXT,
-  -- 학생 신규 입장 허용 여부. 시험 시작 시 자동으로 닫히며 교사가 감독 화면에서
-  -- 시작 전에 먼저 닫거나, 필요한 경우 다시 열 수 있다.
+  -- 이전 버전의 입장 마감 상태와 백업 호환을 위해 유지한다. 현재는 시험 종료 전까지
+  -- 올바른 입장 코드가 있으면 참여할 수 있어 항상 0으로 운용한다.
   admission_closed INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -37,6 +45,9 @@ CREATE TABLE IF NOT EXISTS questions (
   -- AI 추출 시 원본 이미지에서 이 문항 발문 영역만 잘라낸 이미지 (uploads 기준 상대 경로).
   -- 수식/도형/선긋기처럼 텍스트로 옮기면 깨지기 쉬운 내용을 원본 그대로 보여주기 위함.
   prompt_image_path TEXT,
+  -- AI 추출 때 사용한 시험지 페이지 원본. 같은 페이지의 여러 문항이 같은 경로를 공유하며,
+  -- 교사 인증이 필요한 재자르기 API에서만 제공한다.
+  source_image_path TEXT,
   points REAL NOT NULL DEFAULT 1,
   correct_short_answers TEXT,
   ai_suggested INTEGER NOT NULL DEFAULT 0,
@@ -93,7 +104,7 @@ CREATE TABLE IF NOT EXISTS exam_sessions (
   score REAL,
   max_score REAL,
   current_question_index INTEGER NOT NULL DEFAULT 0,
-  -- 같은 출석번호로 이미 참여/응시 중인 세션에 다른 기기가 또 참여하려 하면 기본적으로
+  -- 같은 번호로 이미 참여/응시 중인 세션에 다른 기기가 또 참여하려 하면 기본적으로
   -- 막는다(둘이 동시에 같은 세션을 건드리면 답 제출/이탈 경고가 뒤섞인다). 원래 쓰던
   -- 기기가 고장나서 다른 기기로 이어가야 하는 등 정당한 상황엔, 교사가 "실시간 감독"에서
   -- 재참여를 허용해줘야 하고, 그러면 다음 참여 시도 한 번만 통과시키고 다시 0으로 돌아간다.
@@ -129,6 +140,37 @@ CREATE TABLE IF NOT EXISTS answers (
 );
 CREATE INDEX IF NOT EXISTS idx_answers_session ON answers(session_id);
 CREATE INDEX IF NOT EXISTS idx_answers_question ON answers(question_id);
+
+-- 최초 시험 결과와 분리해서 보관하는 교사 배정형 오답 재풀이 세션.
+CREATE TABLE IF NOT EXISTS review_assignments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL UNIQUE REFERENCES exam_sessions(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'assigned' CHECK(status IN ('assigned','in_progress','completed')),
+  current_index INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  completed_at TEXT,
+  recovery_code_hash TEXT,
+  recovery_code_expires_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS review_assignment_questions (
+  assignment_id INTEGER NOT NULL REFERENCES review_assignments(id) ON DELETE CASCADE,
+  question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  order_index INTEGER NOT NULL,
+  PRIMARY KEY (assignment_id, question_id)
+);
+
+CREATE TABLE IF NOT EXISTS review_answers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  assignment_id INTEGER NOT NULL REFERENCES review_assignments(id) ON DELETE CASCADE,
+  question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  selected_choice_id INTEGER REFERENCES choices(id),
+  short_answer_text TEXT,
+  is_correct INTEGER NOT NULL,
+  answered_at TEXT NOT NULL,
+  UNIQUE(assignment_id, question_id)
+);
 
 CREATE TABLE IF NOT EXISTS warning_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

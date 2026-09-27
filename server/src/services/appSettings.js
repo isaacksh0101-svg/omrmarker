@@ -88,12 +88,34 @@ function readEncryptedField(fieldName) {
 }
 
 export function getGeminiApiKey() {
+  // 교사가 화면에서 명시적으로 키를 지웠으면, .env의 GEMINI_API_KEY(개발용 기본값)로도
+  // 떨어지지 않고 "키 없음" 상태를 그대로 유지한다 - API 키 없이 동작(로컬 OCR만으로
+  // 문항을 추출하는 경로 등)을 테스트하려는 목적이라, 의도와 다르게 .env 값이 슬쩍
+  // 되살아나면 테스트가 안 된다.
+  if (readSettings().geminiApiKeyCleared) return '';
   return readEncryptedField('geminiApiKey') || config.gemini.apiKey || '';
 }
 
 export function setGeminiApiKey(apiKey) {
   // 키가 바뀌면 이전 프로젝트에서 받아둔 모델 목록은 더 이상 유효하지 않을 수 있다.
-  writeSettings({ geminiApiKey: encryptValue(apiKey), geminiModelCatalog: null });
+  writeSettings({ geminiApiKey: encryptValue(apiKey), geminiApiKeyCleared: false, geminiModelCatalog: null });
+}
+
+export function clearGeminiApiKey() {
+  writeSettings({ geminiApiKey: null, geminiApiKeyCleared: true, geminiModelCatalog: null });
+}
+
+export function getUpstageApiKey() {
+  if (readSettings().upstageApiKeyCleared) return '';
+  return readEncryptedField('upstageApiKey') || process.env.UPSTAGE_API_KEY || '';
+}
+
+export function setUpstageApiKey(apiKey) {
+  writeSettings({ upstageApiKey: encryptValue(apiKey), upstageApiKeyCleared: false });
+}
+
+export function clearUpstageApiKey() {
+  writeSettings({ upstageApiKey: null, upstageApiKeyCleared: true });
 }
 
 export function getGeminiModel() {

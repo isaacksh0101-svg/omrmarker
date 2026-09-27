@@ -29,6 +29,11 @@ export const config = {
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || '',
     model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    // 원본은 문항 이미지 자르기에 그대로 쓰고, Gemini에 전송하는 복사본만 이 범위 안으로
+    // 축소한다. 휴대폰의 4K 이상 사진을 그대로 전송해 이미지 처리량이 불필요하게 커지는
+    // 것을 막되, 시험지의 작은 글자와 수식을 읽을 수 있는 해상도는 남긴다.
+    maxImageWidth: Number(process.env.GEMINI_MAX_IMAGE_WIDTH) || 2200,
+    maxImageHeight: Number(process.env.GEMINI_MAX_IMAGE_HEIGHT) || 2200,
   },
   // 화면 이탈 감지는 첫 이탈부터 즉시 강제 제출한다(경고 유예 없음). 이 값은 blur/
   // visibilitychange/fullscreenchange가 같은 탭 전환 한 번에 겹쳐 뜰 때 로그만 중복

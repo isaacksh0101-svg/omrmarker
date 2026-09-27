@@ -13,15 +13,62 @@ import { Button } from '../../components/Button';
 import { Badge } from '../../components/Badge';
 import { PenCanvas, type PenCanvasHandle, type PenTool } from '../../components/PenCanvas';
 import { MathText } from '../../components/MathText';
-import { IconEraser, IconHand, IconPen, IconTrash, IconUndo } from '../../components/icons';
+import { IconEraser, IconFingerDraw, IconGrip, IconPen, IconTrash, IconUndo } from '../../components/icons';
+import {
+  addFullscreenChangeListener,
+  getFullscreenElementCompat,
+  isFullscreenSupported,
+  removeFullscreenChangeListener,
+  requestFullscreenCompat,
+} from '../../lib/fullscreen';
 
 const PEN_COLORS = ['#1b1c22', '#f04438', '#3258ce'];
-const FINGER_MODE_KEY = 'omr_finger_writing';
 
 function formatTime(sec: number) {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// 태블릿/휴대폰에서 정답 입력창을 누르면 화면 키패드가 올라오는데, 일부 브라우저는
+// 100vh를 키패드만큼 줄여주지 않는다 - 그러면 h-screen 레이아웃 전체가 실제 보이는
+// 영역보다 커져서, 브라우저가 입력창을 보이게 하려고 페이지를 스크롤하고, 그 바람에
+// 위쪽 펜 도구 모음이 화면 밖으로 밀려나거나 아래쪽 입력창이 키패드에 가려진다.
+// visualViewport로 실제 보이는 높이를 직접 재서 컨테이너 키를 그만큼만 잡으면, 키패드가
+// 뜨든 안 뜨든 헤더/입력창이 항상 그 안에 고정된 채로 남는다.
+type VisibleViewport = {
+  width: number;
+  height: number;
+  offsetLeft: number;
+  offsetTop: number;
+};
+
+function getVisibleViewport(): VisibleViewport {
+  const viewport = window.visualViewport;
+  return {
+    width: viewport?.width ?? window.innerWidth,
+    height: viewport?.height ?? window.innerHeight,
+    offsetLeft: viewport?.offsetLeft ?? 0,
+    offsetTop: viewport?.offsetTop ?? 0,
+  };
+}
+
+function useVisibleViewport() {
+  const [viewport, setViewport] = useState(getVisibleViewport);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    const update = () => setViewport(getVisibleViewport());
+    update();
+    vv?.addEventListener('resize', update);
+    vv?.addEventListener('scroll', update);
+    window.addEventListener('resize', update);
+    return () => {
+      vv?.removeEventListener('resize', update);
+      vv?.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+    };
+  }, []);
+  return viewport;
 }
 
 // 대기 화면과 시작 게이트 화면 양쪽에 똑같이 띄운다 - 전체화면을 지원하지 않는 기기
@@ -40,7 +87,7 @@ function AntiCheatNotice() {
       <div className="border-t border-danger/15 pt-3">
         <p className="text-xs font-bold text-ink">시험 데이터 처리 안내</p>
         <p className="mt-1 text-xs leading-relaxed text-ink-soft">
-          출석번호, 답안, 점수, 문항별 소요시간, 필기와 화면 이탈 기록은 시험 운영·채점·학습분석을 위해
+          번호, 답안, 점수, 문항별 소요시간, 필기와 화면 이탈 기록은 시험 운영·채점·학습분석을 위해
           선생님 PC에 저장되며 학기 말에 삭제됩니다. 열람·정정·삭제가 필요하면 담당 선생님께 요청하세요.
         </p>
       </div>
@@ -48,33 +95,10 @@ function AntiCheatNotice() {
   );
 }
 
-// 전체화면 API - 사파리(구버전)는 webkit 접두사를 쓰므로 감지/호출을 한 곳에 모아둔다.
 // 시험 중 전체화면을 벗어나는 것(alt-tab, 창 전환, 최소화 등 대부분의 "다른 화면으로 이동"
 // 동작은 브라우저가 자동으로 전체화면을 해제시킨다)을 이탈 감지의 주 신호로 쓴다 - blur나
 // visibilitychange보다 타이밍이 훨씬 더 명확하고 안정적이다(중복 카운트 버그의 원인이었던
 // "돌아왔는지 애매한 타이밍" 문제 자체가 없다).
-function isFullscreenSupported() {
-  const doc = document as Document & { webkitFullscreenEnabled?: boolean };
-  return !!(doc.fullscreenEnabled || doc.webkitFullscreenEnabled);
-}
-function requestFullscreenCompat(el: HTMLElement) {
-  const anyEl = el as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> };
-  if (el.requestFullscreen) return el.requestFullscreen();
-  if (anyEl.webkitRequestFullscreen) return anyEl.webkitRequestFullscreen();
-  return Promise.reject(new Error('fullscreen not supported'));
-}
-function getFullscreenElementCompat() {
-  const doc = document as Document & { webkitFullscreenElement?: Element | null };
-  return doc.fullscreenElement || doc.webkitFullscreenElement || null;
-}
-function addFullscreenChangeListener(fn: () => void) {
-  document.addEventListener('fullscreenchange', fn);
-  document.addEventListener('webkitfullscreenchange', fn);
-}
-function removeFullscreenChangeListener(fn: () => void) {
-  document.removeEventListener('fullscreenchange', fn);
-  document.removeEventListener('webkitfullscreenchange', fn);
-}
 
 export function TakeExam() {
   const { examId } = useParams();
@@ -105,15 +129,52 @@ export function TakeExam() {
   const [remainingSec, setRemainingSec] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const [penActive, setPenActive] = useState(false);
+  // 시험에 들어오면 S-Pen 필기는 바로 사용할 수 있게 켜 둔다. 손가락 필기는 별도
+  // 버튼을 눌렀을 때만 켜져 기본 상태의 한 손가락 스크롤을 방해하지 않는다.
   const [penTool, setPenTool] = useState<PenTool>('pen');
   const [penColor, setPenColor] = useState(PEN_COLORS[0]);
   const [hasStrokes, setHasStrokes] = useState(false);
-  // S-Pen이 없는 학생을 위한 손가락 필기 모드 - 이 기기(브라우저)에 저장해두고, 다음
-  // 문항/시험에서도 매번 다시 켤 필요 없게 한다.
-  const [fingerMode, setFingerMode] = useState(() => localStorage.getItem(FINGER_MODE_KEY) === '1');
+  // S-Pen이 없는 학생을 위한 손가락 필기 모드 - 기기를 공유하는 교실 특성상 이전 학생이
+  // 켜둔 설정이 다음 학생에게 그대로 넘어가면 안 되므로, 매 시험 진입마다 항상 펜 모드로
+  // 새로 시작한다(저장하지 않음).
+  const [fingerMode, setFingerMode] = useState(false);
   const penRef = useRef<PenCanvasHandle>(null);
+  const visibleViewport = useVisibleViewport();
 
+  // 정답 입력창을 화면 바닥에 딱 붙이지 않고 살짝 띄운 플로팅 패널로 두고, 손잡이를
+  // 잡아 원하는 자리로 옮길 수 있게 한다 - 학생이 필기 중인 자리를 가리면 옆으로 치울 수
+  // 있어야 하기 때문. null이면 기본 위치(화면 아래 가운데)에 그대로 둔다.
+  const [floatPos, setFloatPos] = useState<{ x: number; y: number } | null>(null);
+  const [floatSize, setFloatSize] = useState({ width: 0, height: 0 });
+  const floatRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
+
+  function handleFloatDragStart(e: React.PointerEvent) {
+    const panel = floatRef.current;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    dragRef.current = { pointerId: e.pointerId, offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  }
+  function handleFloatDragMove(e: React.PointerEvent) {
+    const drag = dragRef.current;
+    const panel = floatRef.current;
+    if (!drag || drag.pointerId !== e.pointerId || !panel) return;
+    const minX = visibleViewport.offsetLeft + 8;
+    const minY = visibleViewport.offsetTop + 8;
+    const maxX = Math.max(minX, visibleViewport.offsetLeft + visibleViewport.width - panel.offsetWidth - 8);
+    const maxY = Math.max(minY, visibleViewport.offsetTop + visibleViewport.height - panel.offsetHeight - 8);
+    setFloatPos({
+      x: Math.min(Math.max(minX, e.clientX - drag.offsetX), maxX),
+      y: Math.min(Math.max(minY, e.clientY - drag.offsetY), maxY),
+    });
+  }
+  function handleFloatDragEnd() {
+    dragRef.current = null;
+  }
+
+  // 키패드가 뜨거나 화면이 회전해 보이는 영역이 바뀌면, 드래그로 옮겨둔 위치가 화면 밖으로
+  // 밀려날 수 있어 다시 안쪽으로 당겨온다.
   const reloadSession = useCallback(async () => {
     const s = await api.get<ExamSession>(`/exams/${id}/sessions/${sessionId}`);
     setSession(s);
@@ -150,6 +211,17 @@ export function TakeExam() {
   }, [id, sessionId, reloadSession, loadPending]);
 
   useEffect(() => {
+    // 같은 /student/exam/:examId 라우트 안에서 다른 시험으로 이동하면 React가 이
+    // 컴포넌트를 재사용하므로 이전 시험의 화면 상태를 비운다.
+    setExam(null);
+    setSession(null);
+    setCurrent(null);
+    setPending(null);
+    setReviewOpenId(null);
+    setRemainingSec(null);
+    setExamStarted(false);
+    disqualifyingRef.current = false;
+    fullscreenArmedRef.current = false;
     if (!sessionId) {
       navigate('/student');
       return;
@@ -172,6 +244,16 @@ export function TakeExam() {
   useEffect(() => {
     penRef.current?.clear();
   }, [activeQuestion?.id]);
+
+  useEffect(() => {
+    const panel = floatRef.current;
+    if (!panel) return;
+    const measure = () => setFloatSize({ width: panel.offsetWidth, height: panel.offsetHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [activeQuestion?.id, examStarted]);
 
   // 대기 화면: 학생이 직접 시작하지 않고, 교사가 '시험 감독' 화면에서 시험을 시작하면
   // 자동으로 응시가 시작된다. 그 전환을 감지하기 위해 대기 중에는 주기적으로 세션
@@ -372,7 +454,7 @@ export function TakeExam() {
           제한시간 {Math.round(exam.time_limit_sec / 60)}분 · 총 {exam.question_count}문항
         </p>
         <div className="mt-8 w-full max-w-xs rounded-3xl border-2 border-accent/25 bg-accent-soft px-6 py-6 shadow-sm">
-          <p className="text-sm font-bold text-accent-ink">내 출석번호</p>
+          <p className="text-sm font-bold text-accent-ink">내 번호</p>
           <p className="mt-1 text-7xl font-black tracking-tight text-accent-ink">
             {session.roll_number}<span className="ml-1 text-3xl">번</span>
           </p>
@@ -421,6 +503,14 @@ export function TakeExam() {
               {a.order_index + 1}
             </span>
           ))}
+        </div>
+        <div className="mt-7 flex flex-wrap gap-2">
+          {(session.answers ?? []).some((a) => !a.is_correct) && (
+            <Button variant="secondary" onClick={() => navigate(`/student/exam/${id}/review`)}>
+              틀린 문항 다시 풀기
+            </Button>
+          )}
+          <Button onClick={() => navigate('/student')}>다른 시험 응시하기</Button>
         </div>
       </div>
     );
@@ -491,12 +581,29 @@ export function TakeExam() {
   const isReview = reviewOpenId != null;
   const isLast = !isReview && (current?.index ?? 0) + 1 >= (current?.total ?? 0);
   const canSubmit = !submitting && (q.type === 'mc' ? selectedChoice !== null : !!shortAnswer.trim());
+  const panelMinX = visibleViewport.offsetLeft + 8;
+  const panelMinY = visibleViewport.offsetTop + 8;
+  const panelMaxX = Math.max(
+    panelMinX,
+    visibleViewport.offsetLeft + visibleViewport.width - floatSize.width - 8,
+  );
+  const panelMaxY = Math.max(
+    panelMinY,
+    visibleViewport.offsetTop + visibleViewport.height - floatSize.height - 12,
+  );
+  const desiredPanelX =
+    floatPos?.x ?? visibleViewport.offsetLeft + Math.max(8, (visibleViewport.width - floatSize.width) / 2);
+  const desiredPanelY = floatPos?.y ?? panelMaxY;
+  const answerPanelPosition = {
+    x: Math.min(Math.max(panelMinX, desiredPanelX), panelMaxX),
+    y: Math.min(Math.max(panelMinY, desiredPanelY), panelMaxY),
+  };
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-bg">
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel px-4 py-2.5 sm:px-6">
+    <div className="flex flex-col overflow-hidden bg-bg" style={{ height: visibleViewport.height }}>
+      <header className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel px-4 py-2.5 sm:px-6">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold text-ink">{exam.title}</p>
+          <p className="truncate text-base font-bold text-ink">{exam.title}</p>
         </div>
         <Badge tone={isReview ? 'warn' : 'neutral'}>
           {isReview ? '복습 · ' : ''}
@@ -506,8 +613,7 @@ export function TakeExam() {
           <Badge tone={remainingSec <= 30 ? 'danger' : 'neutral'}>{formatTime(remainingSec)}</Badge>
         )}
         <div className="flex items-center gap-1">
-          {penActive && (
-            <>
+          <>
               {PEN_COLORS.map((c) => (
                 <button
                   key={c}
@@ -548,26 +654,28 @@ export function TakeExam() {
                 <IconTrash className="h-4.5 w-4.5" />
               </button>
               <button
-                aria-label="손가락 필기 모드 켜기/끄기"
-                title="펜이 없으면 손가락으로도 필기할 수 있어요"
+                aria-label="손가락 필기 모드"
+                title="손가락으로 필기합니다. 두 손가락으로 화면을 이동할 수 있습니다."
                 onClick={() => {
-                  const next = !fingerMode;
-                  setFingerMode(next);
-                  localStorage.setItem(FINGER_MODE_KEY, next ? '1' : '0');
+                  setFingerMode(true);
+                  setPenTool('pen');
                 }}
-                className={`ml-1 rounded-lg p-1.5 ${
-                  fingerMode ? 'bg-accent-soft text-accent-ink' : 'text-ink-soft hover:bg-surface-container'
+                className={`ml-1 flex h-8 w-8 items-center justify-center rounded-lg ${
+                  fingerMode ? 'bg-accent text-white' : 'text-ink-soft hover:bg-surface-container'
                 }`}
               >
-                <IconHand className="h-4.5 w-4.5" />
+                <IconFingerDraw className="h-4.5 w-4.5" />
               </button>
-            </>
-          )}
+          </>
           <button
-            aria-label="펜 필기 켜기/끄기"
-            onClick={() => setPenActive((v) => !v)}
-            className={`rounded-lg p-1.5 ${
-              penActive ? 'bg-accent text-white' : 'text-ink-soft hover:bg-surface-container'
+            aria-label="펜 필기 모드"
+            title="펜으로 필기합니다. 손가락 한 개로 화면을 이동할 수 있습니다."
+            onClick={() => {
+              setFingerMode(false);
+              setPenTool('pen');
+            }}
+            className={`flex h-8 w-8 items-center justify-center rounded-lg ${
+              !fingerMode ? 'bg-accent text-white' : 'text-ink-soft hover:bg-surface-container'
             }`}
           >
             <IconPen className="h-4.5 w-4.5" />
@@ -589,11 +697,11 @@ export function TakeExam() {
                   className="max-w-full rounded-lg border border-line"
                 />
               ) : q.prompt ? (
-                <p className="whitespace-pre-wrap text-base font-bold text-ink">
+                <p className="whitespace-pre-wrap text-xl font-bold text-ink">
                   <MathText text={q.prompt} />
                 </p>
               ) : (
-                <p className="text-base text-ink-soft">종이 시험지의 {q.order_index + 1}번 문항을 마킹하세요.</p>
+                <p className="text-xl text-ink-soft">종이 시험지의 {q.order_index + 1}번 문항을 마킹하세요.</p>
               )}
             </div>
 
@@ -604,7 +712,7 @@ export function TakeExam() {
                 문제와 같이 스크롤된다. */}
             <PenCanvas
               ref={penRef}
-              active={penActive}
+              active
               tool={penTool}
               color={penColor}
               allowTouch={fingerMode}
@@ -614,10 +722,28 @@ export function TakeExam() {
         </div>
       </div>
 
-      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-line bg-panel px-4 py-3 sm:px-6">
+      <div
+        ref={floatRef}
+        className="fixed z-20 flex max-w-[calc(100vw-16px)] flex-wrap items-center gap-2 rounded-2xl border border-line bg-panel px-4 py-3 shadow-lg"
+        style={{
+          left: answerPanelPosition.x,
+          top: answerPanelPosition.y,
+        }}
+      >
+        <button
+          type="button"
+          aria-label="답안 입력창 위치 옮기기"
+          className="-ml-1 flex h-7 w-6 shrink-0 touch-none items-center justify-center rounded text-ink-soft active:cursor-grabbing"
+          onPointerDown={handleFloatDragStart}
+          onPointerMove={handleFloatDragMove}
+          onPointerUp={handleFloatDragEnd}
+          onPointerCancel={handleFloatDragEnd}
+        >
+          <IconGrip className="h-4 w-4" />
+        </button>
         {q.type === 'short' && (
           <input
-            className="w-full min-w-0 rounded-xl border border-line bg-bg px-4 py-2.5 text-base text-ink outline-none focus:border-accent sm:w-[28rem]"
+            className="w-full min-w-0 rounded-xl border border-line bg-bg px-4 py-2.5 text-lg text-ink outline-none focus:border-accent sm:w-[28rem]"
             placeholder="정답 입력"
             value={shortAnswer}
             onChange={(e) => setShortAnswer(e.target.value)}
@@ -648,7 +774,7 @@ export function TakeExam() {
             {q.choices.map((c) => (
               <button
                 key={c.id}
-                className={`rounded-xl border px-3.5 py-2.5 text-left text-sm transition-all duration-150 ${
+                className={`rounded-xl border px-3.5 py-2.5 text-left text-base transition-all duration-150 ${
                   selectedChoice === c.id
                     ? 'border-accent bg-accent-soft text-accent-ink'
                     : 'border-line bg-panel text-ink hover:border-accent/50'

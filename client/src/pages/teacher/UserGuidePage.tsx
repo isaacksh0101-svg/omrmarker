@@ -8,6 +8,7 @@ const sections = [
   { id: 'join', label: '학생 접속' },
   { id: 'monitor', label: '시험 감독' },
   { id: 'results', label: '결과와 리포트' },
+  { id: 'insights', label: '배지 안내' },
   { id: 'storage', label: '저장·백업·삭제' },
   { id: 'trouble', label: '문제 해결' },
 ];
@@ -49,7 +50,7 @@ export function UserGuideContent() {
             <li>교사용 비밀번호를 설정합니다.</li>
             <li>학생 관리에서 명단을 준비합니다.</li>
             <li>시험지 만들기에서 시험을 만들고 문항과 정답을 확인합니다.</li>
-            <li>환경설정에서 학생 접속용 학교 내부 네트워크를 선택한 뒤 QR 또는 링크를 학생에게 제공합니다.</li>
+            <li>환경설정에서 학생 접속용 학교 내부 네트워크를 선택한 뒤 시험 감독 화면의 QR 또는 링크를 학생에게 제공합니다.</li>
           </ol>
           <p className="rounded-xl bg-warning/10 px-3 py-2 text-warning">
             공개·게스트 Wi-Fi가 아닌 학교가 관리하는 내부 네트워크에서 사용하세요.
@@ -57,7 +58,7 @@ export function UserGuideContent() {
         </GuideSection>
 
         <GuideSection id="roster" title="2. 학생 명단 준비">
-          <p><Link to="/roster" className="font-bold text-accent-ink underline">학생 관리</Link>에서 직접 추가하거나 Excel 양식을 내려받아 명단을 가져올 수 있습니다. 이름은 선택항목이며 출석번호만으로도 사용할 수 있습니다.</p>
+          <p><Link to="/roster" className="font-bold text-accent-ink underline">학생 관리</Link>에서 직접 추가하거나 Excel 양식을 내려받아 명단을 가져올 수 있습니다. 이름은 선택항목이며 번호만으로도 사용할 수 있습니다.</p>
           <ul className="list-disc space-y-1 pl-5">
             <li><b className="text-ink">명단 삭제</b>: 명단 행을 삭제합니다. 과거 학습 데이터는 별도로 남을 수 있습니다.</li>
             <li><b className="text-ink">선택한 학습 데이터 삭제</b>: 체크박스로 전체 또는 원하는 학생을 선택해 응시·답안·점수·문항별 시간·필기·화면 이탈 기록을 완전 삭제하고 명단은 유지합니다.</li>
@@ -82,25 +83,43 @@ export function UserGuideContent() {
         <GuideSection id="join" title="5. 학생 접속">
           <ol className="list-decimal space-y-1 pl-5">
             <li>교사 PC와 학생 기기를 같은 내부 네트워크에 연결합니다.</li>
-            <li>환경설정의 학생 접속 QR 또는 링크를 공유합니다.</li>
-            <li>학생이 출석번호와 응시할 시험을 선택하고 대기합니다.</li>
+            <li><Link to="/exam-monitor" className="font-bold text-accent-ink underline">시험 감독</Link> 화면의 학생 접속 QR 또는 링크를 공유합니다.</li>
+            <li>감독할 시험을 추가하고 카드에 표시된 6자리 입장 코드를 학생에게 안내합니다.</li>
+            <li>학생이 번호와 입장 코드를 입력하고 대기합니다. 연속 시험은 첫 시험을 정상적으로 마치면 코드를 다시 입력하지 않고 자동 연결됩니다.</li>
             <li>교사는 `접속 학생 확인 후 시작`에서 번호와 인원을 확인하고 시험을 시작합니다.</li>
-            <li>시험 시작과 동시에 새 학생의 입장이 마감됩니다. 기기를 바꿔야 하는 학생만 감독 화면에서 재참여를 허용합니다.</li>
+            <li>시험 시작 후에도 올바른 코드를 입력한 학생은 들어올 수 있으며 입장 즉시 자신의 제한시간이 시작됩니다. `시험 종료`를 누르면 신규 입장과 진행 중 응시가 모두 종료됩니다.</li>
           </ol>
-          <p>Windows 공용(Public) 네트워크는 학생 접속이 차단됩니다. 접속이 안 되면 환경설정에서 학교 내부망 어댑터를 선택하고, 학교 AP의 기기간 통신과 Windows 방화벽 포트 4000을 확인하세요.</p>
+          <p>Windows 공용(Public) 네트워크는 학생 접속이 차단됩니다. 접속이 안 되면 환경설정에서 학교 내부망 어댑터를 선택하고, 학교 AP의 기기간 통신과 Windows 방화벽에서 ScoreLab의 네트워크 접근 허용 여부를 확인하세요.</p>
         </GuideSection>
 
         <GuideSection id="monitor" title="6. 시험 감독">
-          <p><Link to="/exam-monitor" className="font-bold text-accent-ink underline">시험 감독</Link>에서는 시작, 학생별 추가시간, 강제 제출, 되살리기, 전체 종료와 다시 열기를 사용할 수 있습니다.</p>
+          <p><Link to="/exam-monitor" className="font-bold text-accent-ink underline">시험 감독</Link>에서는 학생 접속 QR·링크와 시험별 입장 코드를 확인하고, 시작, 학생별 추가시간, 강제 제출, 되살리기, 전체 종료와 다시 열기를 사용할 수 있습니다. 코드 변경 시 기존 코드는 즉시 폐기되지만 이미 입장한 학생의 세션에는 영향을 주지 않습니다.</p>
           <p>학생이 다른 탭·창으로 이동하거나 화면을 최소화하면 강제 제출될 수 있습니다. 오탐이나 기기 문제는 교사가 확인해 재참여 여부를 결정하세요.</p>
         </GuideSection>
 
         <GuideSection id="results" title="7. 결과와 리포트">
-          <p><Link to="/exam-reports" className="font-bold text-accent-ink underline">시험지 관리</Link>에서는 점수, 문항별 정답률·소요시간, 성취기준별 결과와 학생별 상세 응답을 확인하고 Excel로 내보낼 수 있습니다.</p>
+          <p><Link to="/exam-management" className="font-bold text-accent-ink underline">시험지 관리</Link>에서는 작성 중이거나 확정한 시험지를 다시 열어 문항·정답·성취기준을 수정할 수 있습니다.</p>
+          <p><Link to="/exam-reports" className="font-bold text-accent-ink underline">시험별 분석</Link>에서는 점수, 문항별 정답률·소요시간, 성취기준별 결과와 학생별 상세 응답을 확인하고 Excel로 내보낼 수 있습니다.</p>
           <p><Link to="/standards-report" className="font-bold text-accent-ink underline">학생별 리포트</Link>에서는 한 학생이 응시한 시험 결과를 모아 볼 수 있습니다. 자동 채점과 분석 결과는 교사가 확인한 뒤 활용하세요.</p>
         </GuideSection>
 
-        <GuideSection id="storage" title="8. 데이터 저장·백업·학기 말 삭제">
+        <GuideSection id="insights" title="8. 배지는 어떻게 계산되나요?">
+          <p>결과 화면과 학생별 리포트에 뜨는 배지는 전부 통계로 자동 계산된 참고 신호입니다. 확정된 판단이 아니라 "한 번 확인해볼 만한 곳"을 알려주는 용도로 활용하세요.</p>
+          <p><b className="text-ink">시간 기준에서 사용하는 사분위수</b>: 기록을 짧은 순서로 놓았을 때 Q1은 하위 25% 지점, Q3은 하위 75% 지점이며, IQR은 Q3−Q1입니다. 아래의 "유난히 빠름·오래 걸림"은 단순히 평균보다 빠르거나 느리다는 뜻이 아니라 이 분포에서 크게 벗어난 값이라는 뜻입니다.</p>
+          <ul className="list-disc space-y-1 pl-5">
+            <li><b className="text-ink">변별력 낮음</b>: 점수가 높은 학생과 낮은 학생의 정답 여부에 차이가 거의 없을 때(점이연 상관 0.2 미만) 붙습니다. 문항 자체나 정답 설정을 다시 확인해보세요.</li>
+            <li><b className="text-ink">문항 배지</b>: 응답자가 8명 이상인 문항이 4개 이상일 때, 각 문항의 평균 풀이시간과 정답률을 서로 비교합니다. "오래 걸림"은 평균 시간이 Q3＋1.5×IQR보다 큰 경우, "빠름"은 평균 시간이 Q1 이하인 경우입니다. "정답률 낮음"은 정답률이 Q1 이하이면서 중앙값보다 낮은 경우, "정답률 높음"은 Q3 이상이면서 중앙값보다 높은 경우입니다. 이 조건의 조합으로 <b className="text-ink">어렵고 오래 걸림 / 빠른 오답이 많음 / 정답률은 높지만 오래 걸림</b>이 붙습니다. <b className="text-ink">학생별 시간차 큼</b>은 한 문항 안에서 학생 풀이시간의 IQR이 다른 문항들의 시간 IQR 분포에서 Q3＋1.5×IQR보다 클 때 붙습니다.</li>
+            <li><b className="text-ink">빠르게 풀고 오답이 많음</b>(학생 목록): 정상 제출한 학생들의 시험 전체 소요시간보다 Q1−1.5×IQR 미만으로 빠르고, 그 학생의 정답률도 학급 정답률 분포의 Q1−1.5×IQR 미만일 때 붙습니다.</li>
+            <li><b className="text-ink">오래 풀었지만 오답이 많음</b>(학생 목록): 시험 전체 소요시간이 Q3＋1.5×IQR보다 길고, 정답률도 Q1−1.5×IQR 미만일 때 붙습니다.</li>
+            <li><b className="text-ink">정확하지만 시간이 오래 걸림</b>(학생 목록): 시험 전체 소요시간이 Q3＋1.5×IQR보다 길지만, 정답률은 학급 중앙값 이상일 때 붙습니다.</li>
+            <li><b className="text-ink">빠르게 풀고 틀림</b>(문항 상세, 학생 답안 화면): 해당 문항을 틀렸고 풀이시간이 그 문항 응답자 중 Q1 이하이며, 그 문항의 학급 정답률이 해당 학생의 시험 전체 정답률보다 높을 때 붙습니다.</li>
+            <li><b className="text-ink">오래 고민하고 틀림</b>(문항 상세, 학생 답안 화면): 해당 문항을 틀렸고 풀이시간이 그 문항 응답자의 Q3＋1.5×IQR보다 길 때 붙습니다.</li>
+            <li><b className="text-ink">반복 확인 필요 / 최근 개선</b>(학생별 리포트): 같은 성취기준에서 최근 3개 시험 모두 학급 평균보다 15%p 이상 낮으면 "반복 확인 필요", 정답률이 뚜렷하게 올랐으면(예: 최근 3회 문항 수 합쳐 5개 이상 응시) "최근 개선"으로 표시됩니다.</li>
+          </ul>
+          <p>IQR이 0이라 모든 기록이 거의 같으면 예외 기준을 사용합니다. 시간은 중앙값의 50% 미만을 "빠름", 150% 초과를 "오래 걸림"으로 보고, 학생 정답률은 학급 중앙값보다 15%p 초과 낮을 때 "낮음"으로 봅니다. 학생 배지는 정상 제출자가 8명 미만이면 계산하지 않으며, 강제 제출 기록은 시간·점수 기준 분포에서 제외합니다.</p>
+        </GuideSection>
+
+        <GuideSection id="storage" title="9. 데이터 저장·백업·학기 말 삭제">
           <p>설치형 앱의 환경설정에서 현재 데이터 저장 경로를 확인하고 변경할 수 있습니다. 위치 변경 시 기존 데이터를 새 폴더로 복사한 뒤 앱이 재시작되며, 이전 폴더는 정상 동작 확인 후 직접 삭제합니다.</p>
           <p>변경 전 저장 위치는 확인 완료 전까지 교사 화면에 경고됩니다. 새 위치를 확인한 뒤 이전 폴더를 삭제하거나 학교가 허용한 방식으로 보관하고 확인을 완료하세요.</p>
           <p>백업은 전체·시험지·학생 명단·성적으로 나눠 내보내고 가져올 수 있습니다. 백업과 `.bak` 복원 사본에는 학생 정보가 포함될 수 있으므로 학교가 허용한 저장장치에서 관리하세요.</p>
@@ -112,9 +131,9 @@ export function UserGuideContent() {
           </ol>
         </GuideSection>
 
-        <GuideSection id="trouble" title="9. 문제 해결과 문의">
+        <GuideSection id="trouble" title="10. 문제 해결과 문의">
           <ul className="list-disc space-y-1 pl-5">
-            <li><b className="text-ink">서버 오류</b>: 중복 실행 여부와 포트 4000 사용 프로그램을 확인하고 다시 실행합니다.</li>
+            <li><b className="text-ink">서버 오류</b>: 중복 실행 여부를 확인하고 ScoreLab을 다시 실행합니다.</li>
             <li><b className="text-ink">Gemini 오류</b>: API 키, 모델 목록, Google AI Studio의 결제·사용량 한도를 확인합니다.</li>
             <li><b className="text-ink">데이터가 보이지 않음</b>: 환경설정의 현재 저장 경로를 확인하고 이전 폴더를 삭제하지 마세요.</li>
           </ul>

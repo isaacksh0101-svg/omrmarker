@@ -8,6 +8,15 @@ import { PageHeader } from '../../components/PageHeader';
 import { IconUsers } from '../../components/icons';
 import { downloadWorkbook } from '../../lib/exportXlsx';
 
+interface IncompleteReview {
+  assignment_id: number;
+  exam_id: number;
+  exam_title: string;
+  status: 'assigned' | 'in_progress';
+  total: number;
+  answered: number;
+}
+
 function NameCell({ roll, name, onSaved }: { roll: number; name: string | null; onSaved: () => void }) {
   const [value, setValue] = useState(name ?? '');
   useEffect(() => setValue(name ?? ''), [name]);
@@ -42,6 +51,10 @@ export function RosterPage() {
   const [selectedRolls, setSelectedRolls] = useState<Set<number>>(new Set());
   const [deletingLearningData, setDeletingLearningData] = useState(false);
   const [learningDataDeleteMode, setLearningDataDeleteMode] = useState(false);
+  const [recoveryStudent, setRecoveryStudent] = useState<RosterEntry | null>(null);
+  const [incompleteReviews, setIncompleteReviews] = useState<IncompleteReview[]>([]);
+  const [recoveryCode, setRecoveryCode] = useState<{ code: string; expires_at: string; exam_title?: string; count?: number } | null>(null);
+  const [issuingAll, setIssuingAll] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function reload() {
@@ -53,7 +66,7 @@ export function RosterPage() {
   async function addStudent() {
     const roll = Number(rollNumber);
     if (!Number.isInteger(roll) || roll <= 0) {
-      setError('출석번호는 1 이상의 숫자여야 합니다.');
+      setError('번호는 1 이상의 숫자여야 합니다.');
       return;
     }
     setError(null);
@@ -158,6 +171,27 @@ export function RosterPage() {
     ]);
   }
 
+  async function openRecovery(student: RosterEntry) {
+    setRecoveryStudent(student);
+    setRecoveryCode(null);
+    setIncompleteReviews(await api.get<IncompleteReview[]>(`/roster/${student.roll_number}/incomplete-reviews`));
+  }
+
+  async function issueRecovery(review: IncompleteReview) {
+    const result = await api.post<{ code: string; expires_at: string }>(`/roster/${recoveryStudent!.roll_number}/incomplete-reviews/${review.assignment_id}/recovery-code`);
+    setRecoveryCode({ ...result, exam_title: review.exam_title });
+  }
+
+  async function issueRecoveryAll() {
+    setIssuingAll(true);
+    try {
+      const result = await api.post<{ code: string; expires_at: string; count: number }>(`/roster/${recoveryStudent!.roll_number}/incomplete-reviews/recovery-code`);
+      setRecoveryCode(result);
+    } finally {
+      setIssuingAll(false);
+    }
+  }
+
   async function handleUploadFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -188,14 +222,14 @@ export function RosterPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-12">
+    <div className="mx-auto max-w-3xl px-6 py-12">
       <PageHeader icon={IconUsers} title="학생 관리" />
 
       <Card className="animate-fade-in-up mt-7">
         <h2 className="text-sm font-bold text-ink">학생 추가</h2>
         <div className="mt-3 flex items-end gap-2">
           <label className="flex flex-col gap-1">
-            <span className="text-xs font-bold text-ink-soft">출석번호</span>
+            <span className="text-xs font-bold text-ink-soft">번호</span>
             <input
               type="number"
               min={1}
@@ -304,7 +338,7 @@ export function RosterPage() {
                       />
                     </th>
                   )}
-                  <th className="px-4 py-2.5">출석번호</th>
+                  <th className="px-4 py-2.5">번호</th>
                   <th className="px-4 py-2.5">이름</th>
                   {!learningDataDeleteMode && <th className="px-4 py-2.5 text-right">관리</th>}
                 </tr>
@@ -331,6 +365,12 @@ export function RosterPage() {
                     {!learningDataDeleteMode && (
                       <td className="px-4 py-2.5 text-right">
                         <button
+                          className="mr-3 text-xs font-bold text-accent-ink hover:underline"
+                          onClick={() => openRecovery(r)}
+                        >
+                          재풀이 연결
+                        </button>
+                        <button
                           className="text-xs text-ink-soft hover:text-danger"
                           onClick={() => removeStudent(r.roll_number)}
                         >
@@ -345,6 +385,52 @@ export function RosterPage() {
           </Card>
         )}
       </div>
+      {recoveryStudent && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setRecoveryStudent(null)}>
+        <Card className="w-full max-w-lg" onClick={(event) => event.stopPropagation()}>
+          <div className="flex items-start justify-between"><div><h2 className="text-lg font-bold text-ink">{recoveryStudent.roll_number}번 재풀이 기기 연결</h2><p className="mt-1 text-xs text-ink-soft">브라우저 초기화 등으로 기존 응시 기록이 사라진 경우에만 사용하세요.</p></div><button className="text-sm font-bold text-ink-soft" onClick={() => setRecoveryStudent(null)}>닫기</button></div>
+          {recoveryCode ? (
+            <div className="mt-5 rounded-2xl bg-accent-soft p-5 text-center">
+              <p className="text-xs font-bold text-accent-ink">
+                {recoveryCode.count != null ? `재풀이 ${recoveryCode.count}개 전체` : recoveryCode.exam_title} · 10분간 1회 사용
+              </p>
+              <p className="mt-2 text-4xl font-black tracking-[0.25em] text-accent-ink">{recoveryCode.code}</p>
+              <p className="mt-3 text-xs text-ink-soft">
+                학생 화면의 '오답 재풀이 복구'에 번호와 이 코드를 입력합니다.
+                {recoveryCode.count != null && ' 이 코드 하나로 미완료 재풀이가 전부 한 번에 연결됩니다.'}
+              </p>
+              <Button className="mt-4" variant="secondary" onClick={() => setRecoveryCode(null)}>다른 시험 선택</Button>
+            </div>
+          ) : incompleteReviews.length === 0 ? (
+            <p className="mt-5 text-sm text-ink-soft">연결할 미완료 오답 재풀이가 없습니다.</p>
+          ) : (
+            <div className="mt-4 flex flex-col gap-2">
+              {incompleteReviews.length > 1 && (
+                <button
+                  onClick={issueRecoveryAll}
+                  disabled={issuingAll}
+                  className="flex items-center justify-between rounded-xl border border-accent bg-accent-soft px-4 py-3 text-left hover:border-accent"
+                >
+                  <span className="text-sm font-bold text-accent-ink">전체 {incompleteReviews.length}개 한 번에 연결</span>
+                  <span className="text-xs font-bold text-accent-ink">{issuingAll ? '발급 중...' : '코드 발급'}</span>
+                </button>
+              )}
+              {incompleteReviews.map((review) => (
+                <button
+                  key={review.assignment_id}
+                  onClick={() => issueRecovery(review)}
+                  className="flex items-center justify-between rounded-xl border border-line px-4 py-3 text-left hover:border-accent"
+                >
+                  <span>
+                    <span className="block text-sm font-bold text-ink">{review.exam_title}</span>
+                    <span className="text-xs text-ink-soft">{review.answered}/{review.total}문항 진행</span>
+                  </span>
+                  <span className="text-xs font-bold text-accent-ink">코드 발급</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>}
     </div>
   );
 }

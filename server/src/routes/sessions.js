@@ -3,8 +3,17 @@ import * as repo from '../db/repo.js';
 import { config } from '../config.js';
 import { emitExamMonitorUpdate } from '../lib/realtime.js';
 import { requireAuth } from '../middleware/auth.js';
+import {
+  attachQuestionInsights,
+  attachQuestionStudentInsights,
+  attachSessionInsights,
+} from '../services/assessmentInsights.js';
 
 export const sessionsRouter = Router();
+
+const failedCodeAttempts = new Map();
+const MAX_CODE_ATTEMPTS = 5;
+const CODE_BLOCK_MS = 5 * 60 * 1000;
 
 function now() {
   return new Date().toISOString();
@@ -26,7 +35,7 @@ function sanitizeQuestionForStudent(q, examMode) {
 
 sessionsRouter.get('/:id/for-student', async (req, res) => {
   const exam = await repo.getExamFull(Number(req.params.id));
-  if (!exam || exam.status !== 'finalized') {
+  if (!exam || exam.status !== 'finalized' || !exam.supervised_at || exam.ends_at) {
     return res.status(404).json({ error: '응시할 수 있는 시험을 찾을 수 없습니다.' });
   }
   res.json({
@@ -40,12 +49,129 @@ sessionsRouter.get('/:id/for-student', async (req, res) => {
   });
 });
 
+sessionsRouter.get('/:id/next-for-student', async (req, res) => {
+  const next = await repo.getNextSupervisedExam(Number(req.params.id));
+  res.json(next);
+});
+
 // ---- 세션 참가/조회 ----
 
+function attemptKey(req) {
+  return req.socket?.remoteAddress || 'unknown';
+}
+
+function codeAttemptBlocked(req) {
+  const entry = failedCodeAttempts.get(attemptKey(req));
+  if (!entry) return false;
+  if (entry.blockedUntil > Date.now()) return true;
+  if (entry.blockedUntil) failedCodeAttempts.delete(attemptKey(req));
+  return false;
+}
+
+function recordCodeFailure(req) {
+  const key = attemptKey(req);
+  const previous = failedCodeAttempts.get(key);
+  const entry = previous && Date.now() - previous.windowStarted < CODE_BLOCK_MS
+    ? previous
+    : { count: 0, blockedUntil: 0, windowStarted: Date.now() };
+  entry.count += 1;
+  if (entry.count >= MAX_CODE_ATTEMPTS) entry.blockedUntil = Date.now() + CODE_BLOCK_MS;
+  failedCodeAttempts.set(key, entry);
+}
+
+async function createOrResumeSession(exam, rollNumber, { continuation = false } = {}) {
+  const student = await repo.getRosterEntry(rollNumber);
+  if (!student) return { status: 400, error: '등록되지 않은 번호입니다.' };
+
+  let session = await repo.getSessionByExamAndRoll(exam.id, rollNumber);
+  if (session && (session.status === 'submitted' || session.status === 'force_submitted')) {
+    return { status: 409, error: '이미 종료된 응시 기록입니다. 다시 응시하려면 선생님께 요청해주세요.' };
+  }
+  if (!continuation && session && (session.status === 'joined' || session.status === 'in_progress')) {
+    if (!session.allow_rejoin) {
+      return {
+        status: 409,
+        error: '이미 이 번호로 참여 중인 기기가 있습니다. 다른 기기에서 이어서 하려면 선생님께 "재참여 허용"을 요청하세요.',
+      };
+    }
+    await repo.setAllowRejoin(session.id, false);
+  }
+  if (!session) {
+    session = await repo.createSession(exam.id, rollNumber);
+    emitExamMonitorUpdate(exam.id);
+  }
+  if (exam.started_at && session.status === 'joined') {
+    await repo.startSession(session.id);
+    session = await repo.getSession(session.id);
+    emitExamMonitorUpdate(exam.id);
+  }
+  return { session };
+}
+
+sessionsRouter.post('/join', async (req, res) => {
+  if (codeAttemptBlocked(req)) {
+    return res.status(429).json({ error: '입장 코드를 여러 번 잘못 입력했습니다. 5분 후 다시 시도해주세요.' });
+  }
+  const admissionCode = String(req.body?.admission_code ?? '').trim();
+  if (!/^\d{6}$/.test(admissionCode)) {
+    recordCodeFailure(req);
+    return res.status(400).json({ error: '6자리 입장 코드를 확인해주세요.' });
+  }
+  const exam = await repo.getSupervisedExamByAdmissionCode(admissionCode);
+  if (!exam) {
+    recordCodeFailure(req);
+    return res.status(400).json({ error: '입장 코드가 올바르지 않거나 종료된 시험입니다.' });
+  }
+  failedCodeAttempts.delete(attemptKey(req));
+  const rollNumber = Number(req.body?.roll_number);
+  if (!Number.isInteger(rollNumber)) return res.status(400).json({ error: '번호를 입력해주세요.' });
+  const result = await createOrResumeSession(exam, rollNumber);
+  if (result.error) return res.status(result.status).json({ error: result.error });
+  res.status(201).json(result.session);
+});
+
+sessionsRouter.post('/review/recover', async (req, res) => {
+  if (codeAttemptBlocked(req)) {
+    return res.status(429).json({ error: '복구 코드를 여러 번 잘못 입력했습니다. 5분 후 다시 시도해주세요.' });
+  }
+  const rollNumber = Number(req.body?.roll_number);
+  const code = String(req.body?.recovery_code ?? '').trim();
+  if (!Number.isInteger(rollNumber) || !/^\d{6}$/.test(code)) {
+    recordCodeFailure(req);
+    return res.status(400).json({ error: '번호와 6자리 복구 코드를 확인해주세요.' });
+  }
+  const recovered = await repo.redeemReviewRecoveryCode(rollNumber, code);
+  if (!recovered) {
+    recordCodeFailure(req);
+    return res.status(400).json({ error: '복구 코드가 올바르지 않거나 만료되었습니다.' });
+  }
+  failedCodeAttempts.delete(attemptKey(req));
+  res.json(recovered);
+});
+
+sessionsRouter.post('/:id/advance', async (req, res) => {
+  const currentExamId = Number(req.params.id);
+  const currentSession = await repo.getSessionByToken(String(req.body?.access_token ?? ''));
+  if (!currentSession || currentSession.exam_id !== currentExamId) {
+    return res.status(404).json({ error: '이전 시험 응시 기록을 확인할 수 없습니다.' });
+  }
+  const completed = currentSession.status === 'submitted'
+    || (currentSession.status === 'force_submitted' && currentSession.disqualify_reason === 'teacher_manual');
+  if (!completed) return res.status(403).json({ error: '현재 시험을 정상적으로 마친 뒤 다음 시험에 참여할 수 있습니다.' });
+  const nextExam = await repo.getNextSupervisedExam(currentExamId);
+  if (!nextExam) return res.json(null);
+  const result = await createOrResumeSession(nextExam, currentSession.roll_number, { continuation: true });
+  if (result.error) return res.status(result.status).json({ error: result.error });
+  res.status(201).json({ exam_id: nextExam.id, session: result.session });
+});
+
 sessionsRouter.post('/:id/sessions', async (req, res) => {
+  if (codeAttemptBlocked(req)) {
+    return res.status(429).json({ error: '입장 코드를 여러 번 잘못 입력했습니다. 5분 후 다시 시도해주세요.' });
+  }
   const examId = Number(req.params.id);
   const exam = await repo.getExam(examId);
-  if (!exam || exam.status !== 'finalized') {
+  if (!exam || exam.status !== 'finalized' || !exam.supervised_at) {
     return res.status(400).json({ error: '응시할 수 있는 시험이 아닙니다.' });
   }
   // 교사가 "시험 전체 종료"를 누른 뒤에는 새로 참여를 시도해도 들어올 수 없다 - "시험
@@ -55,9 +181,15 @@ sessionsRouter.post('/:id/sessions', async (req, res) => {
     return res.status(400).json({ error: '선생님이 시험을 종료했습니다. 다시 열릴 때까지 기다려주세요.' });
   }
 
+  if (String(req.body?.admission_code ?? '').trim() !== exam.admission_code) {
+    recordCodeFailure(req);
+    return res.status(400).json({ error: '입장 코드가 올바르지 않습니다.' });
+  }
+  failedCodeAttempts.delete(attemptKey(req));
+
   const rollNumber = Number(req.body.roll_number);
   if (!Number.isInteger(rollNumber)) {
-    return res.status(400).json({ error: '출석번호를 입력해주세요.' });
+    return res.status(400).json({ error: '번호를 입력해주세요.' });
   }
   const student = await repo.getRosterEntry(rollNumber);
   if (!student) {
@@ -69,10 +201,6 @@ sessionsRouter.post('/:id/sessions', async (req, res) => {
   if (session && (session.status === 'submitted' || session.status === 'force_submitted')) {
     return res.status(409).json({ error: '이미 종료된 응시 기록입니다. 다시 응시하려면 선생님께 요청해주세요.' });
   }
-  if (exam.admission_closed && (!session || !session.allow_rejoin)) {
-    return res.status(403).json({ error: '선생님이 입장을 마감했습니다. 감독 화면에서 확인을 요청해주세요.' });
-  }
-
   // 같은 번호로 이미 참여/응시 중인 세션이 있는데 또 참여하려는 경우 - 다른 기기가
   // 끼어들면 답 제출/이탈 경고가 뒤섞이므로 기본적으로 막는다. 원래 기기가 고장나서
   // 다른 기기로 이어가야 하는 등 정당한 상황엔 교사가 "실시간 감독"에서 재참여를 허용해줘야
@@ -160,6 +288,7 @@ sessionsRouter.post('/:id/end-all', requireAuth, async (req, res) => {
 
   const ended = await repo.endAllActiveSessions(examId);
   await repo.markExamEnded(examId);
+  await repo.unsuperviseExam(examId);
   emitExamMonitorUpdate(examId);
   res.json({ ended });
 });
@@ -173,8 +302,9 @@ sessionsRouter.post('/:id/reopen', requireAuth, async (req, res) => {
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
 
   await repo.clearExamEnded(examId);
+  await repo.superviseExam(examId);
   emitExamMonitorUpdate(examId);
-  res.status(204).end();
+  res.json(await repo.getExam(examId));
 });
 
 function isTimedOut(session, exam) {
@@ -444,6 +574,115 @@ sessionsRouter.post('/:id/sessions/:sessionId/submit', async (req, res) => {
   res.json(await repo.getSession(session.id));
 });
 
+// ---- 교사 배정형 오답 재풀이 ----
+sessionsRouter.post('/:id/sessions/:sessionId/review-assignment', requireAuth, async (req, res) => {
+  const examId = Number(req.params.id);
+  const sessionId = Number(req.params.sessionId);
+  const session = await getSessionOr404(examId, sessionId, res);
+  if (!session) return;
+  if (session.status !== 'submitted' && session.status !== 'force_submitted') {
+    return res.status(400).json({ error: '제출이 끝난 학생에게만 오답 재풀이를 배정할 수 있습니다.' });
+  }
+  const assignment = await repo.assignWrongAnswerReview(sessionId);
+  if (!assignment) return res.status(400).json({ error: '다시 풀 오답 문항이 없습니다.' });
+  const questions = await repo.getReviewAssignmentQuestions(assignment.id);
+  res.status(201).json({ ...assignment, question_count: questions.length });
+});
+
+sessionsRouter.get('/:id/sessions/:sessionId/review-assignment', requireAuth, async (req, res) => {
+  const examId = Number(req.params.id);
+  const sessionId = Number(req.params.sessionId);
+  const session = await getSessionOr404(examId, sessionId, res);
+  if (!session) return;
+  const assignment = await repo.getReviewAssignmentBySession(sessionId);
+  if (!assignment) return res.status(404).json({ error: '오답 재풀이 기록이 없습니다.' });
+  const questions = await repo.getReviewAssignmentDetail(assignment.id);
+  res.json({ assignment, questions });
+});
+
+// 학생 첫 화면에서 이 브라우저에 남아 있는 세션 토큰만 확인해 재풀이 바로가기를 만든다.
+// 시험이 감독 종료된 뒤에도 재풀이는 독립적으로 접근할 수 있지만, 원래 응시 기기의 비밀
+// 토큰 없이는 상태조차 조회할 수 없다.
+sessionsRouter.get('/:id/review/status', async (req, res) => {
+  const examId = Number(req.params.id);
+  const session = await getSessionByTokenOr404(examId, String(req.query.access_token ?? ''), res);
+  if (!session) return;
+  const assignment = await repo.getReviewAssignmentBySession(session.id);
+  if (!assignment) return res.json(null);
+  const exam = await repo.getExam(examId);
+  const questions = await repo.getReviewAssignmentQuestions(assignment.id);
+  const answers = await repo.getReviewAnswerSummary(assignment.id);
+  res.json({
+    exam_id: examId,
+    exam_title: exam?.title ?? '시험',
+    status: assignment.status,
+    total: questions.length,
+    answered: answers.length,
+    correct: answers.filter((answer) => answer.is_correct).length,
+    completed_at: assignment.completed_at,
+  });
+});
+
+sessionsRouter.get('/:id/review', async (req, res) => {
+  const examId = Number(req.params.id);
+  const session = await getSessionByTokenOr404(examId, String(req.query.access_token ?? ''), res);
+  if (!session) return;
+  if (session.status !== 'submitted' && session.status !== 'force_submitted') {
+    return res.status(400).json({ error: '시험을 마친 뒤에 오답을 복습할 수 있습니다.' });
+  }
+
+  const exam = await repo.getExamFull(examId);
+  if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
+
+  const assignment = await repo.getReviewAssignmentBySession(session.id);
+  if (!assignment) return res.status(404).json({ error: '선생님이 배정한 오답 재풀이가 없습니다.' });
+  await repo.startReviewAssignment(assignment.id);
+  const assigned = await repo.getReviewAssignmentQuestions(assignment.id);
+  const assignedIds = new Set(assigned.map((row) => row.question_id));
+  const questions = exam.questions
+    .filter((q) => assignedIds.has(q.id))
+    .map((q) => sanitizeQuestionForStudent(q, exam.mode));
+  const answers = await repo.getReviewAnswerSummary(assignment.id);
+  res.json({ exam_title: exam.title, assignment: { ...assignment, status: answers.length >= questions.length ? 'completed' : assignment.status }, questions, answers });
+});
+
+sessionsRouter.post('/:id/review/answer', async (req, res) => {
+  const examId = Number(req.params.id);
+  const session = await getSessionByTokenOr404(examId, String(req.body?.access_token ?? ''), res);
+  if (!session) return;
+  if (session.status !== 'submitted' && session.status !== 'force_submitted') {
+    return res.status(400).json({ error: '시험을 마친 뒤에 오답을 복습할 수 있습니다.' });
+  }
+
+  const assignment = await repo.getReviewAssignmentBySession(session.id);
+  if (!assignment) return res.status(404).json({ error: '선생님이 배정한 오답 재풀이가 없습니다.' });
+  const questionId = Number(req.body?.question_id);
+  const assigned = await repo.getReviewAssignmentQuestions(assignment.id);
+  if (!assigned.some((row) => row.question_id === questionId)) return res.status(400).json({ error: '재풀이 대상 문항이 아닙니다.' });
+
+  const exam = await repo.getExamFull(examId);
+  const question = exam?.questions.find((q) => q.id === questionId);
+  if (!question) return res.status(404).json({ error: '문항을 찾을 수 없습니다.' });
+
+  let isCorrect = false;
+  if (question.type === 'mc') {
+    const choice = question.choices.find((c) => c.id === Number(req.body?.selected_choice_id));
+    isCorrect = Boolean(choice?.is_correct);
+  } else {
+    const normalize = (s) => s.trim().toLowerCase();
+    const accepted = (question.correct_short_answers ?? []).map(normalize);
+    isCorrect = accepted.includes(normalize(String(req.body?.short_answer_text ?? '')));
+  }
+
+  const updated = await repo.saveReviewAnswer(assignment.id, questionId, {
+    selectedChoiceId: Number(req.body?.selected_choice_id) || null,
+    shortAnswerText: String(req.body?.short_answer_text ?? ''),
+    isCorrect,
+  });
+  const answers = await repo.getReviewAnswerSummary(assignment.id);
+  res.json({ done: updated.status === 'completed', answered_count: answers.length });
+});
+
 // ---- 교사용: 시험 감독(실시간 모니터링) ----
 
 sessionsRouter.get('/:id/monitor', requireAuth, async (req, res) => {
@@ -462,6 +701,7 @@ sessionsRouter.get('/:id/monitor', requireAuth, async (req, res) => {
       started_at: exam.started_at,
       ends_at: exam.ends_at,
       admission_closed: Boolean(exam.admission_closed),
+      admission_code: exam.admission_code,
     },
     students,
   });
@@ -550,7 +790,8 @@ sessionsRouter.post('/:id/sessions/:sessionId/force-submit', requireAuth, async 
 // 오탐(인터넷 끊김 등)으로 억울하게 종료됐거나, 사정을 봐서 계속 풀게 해주고 싶을 때 쓴다.
 // 시간이 이미 다 지나있으면 되살려도 바로 다시 시간 초과로 제출돼버리므로, 지금 시각을
 // 새 시작 시각으로 삼아 처음 시험 시간만큼 다시 준다(기존에 받은 추가시간은 그대로 유지).
-// 경고 횟수도 0으로 초기화한다 - 안 그러면 이미 최대치라 조그만 이탈 한 번에 바로 재종료된다.
+// 경고 횟수도 0으로 초기화하고, 학생이 입장 코드를 다시 입력하는 경우를 위해 재입장 1회도
+// 함께 허용한다. 재입장에 성공하면 createOrResumeSession에서 허용값을 즉시 소진한다.
 sessionsRouter.post('/:id/sessions/:sessionId/revive', requireAuth, async (req, res) => {
   const examId = Number(req.params.id);
   const sessionId = Number(req.params.sessionId);
@@ -608,16 +849,19 @@ sessionsRouter.get('/:id/results', requireAuth, async (req, res) => {
   const exam = await repo.getExamFull(examId);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
 
-  const { sessions, questionStats } = await repo.getResultsForExam(examId);
+  const { sessions, questionStats: rawQuestionStats } = await repo.getResultsForExam(examId);
 
-  attachOutliers(sessions);
+  attachSessionInsights(sessions);
+  const questionStats = attachQuestionInsights(rawQuestionStats);
 
+  // 실제로 유난히 오래 걸린다는 신호가 있는 문항만 보여준다. 모든 시간이 비슷할 때도
+  // 무조건 상위 3개를 만들던 기존 방식은 교사에게 불필요한 경고를 만들었다.
   const slowestQuestions = [...questionStats]
-    .filter((q) => q.avg_time_spent_ms != null)
+    .filter((q) => q.insight_codes.includes('difficult_slow') || q.insight_codes.includes('accurate_slow'))
     .sort((a, b) => b.avg_time_spent_ms - a.avg_time_spent_ms)
     .slice(0, 3);
   const lowestAccuracyQuestions = [...questionStats]
-    .filter((q) => q.answered_count > 0)
+    .filter((q) => q.insight_codes.includes('difficult_slow') || q.insight_codes.includes('fast_wrong'))
     .sort((a, b) => a.correct_count / a.answered_count - b.correct_count / b.answered_count)
     .slice(0, 3);
 
@@ -651,49 +895,48 @@ sessionsRouter.get('/:id/questions/:qid/breakdown', requireAuth, async (req, res
   const { sessions } = await repo.getResultsForExam(examId);
   const ownAccuracyByRoll = new Map(
     sessions
-      .filter((s) => s.status === 'submitted' || s.status === 'force_submitted')
+      .filter((s) => s.status === 'submitted')
       .map((s) => [s.roll_number, s.max_score ? s.score / s.max_score : 0]),
   );
 
-  const students = rows.map((r) => {
-    const ownAccuracy = ownAccuracyByRoll.get(r.roll_number);
-    const isOutlier =
-      answeredCount >= 4 && accuracy != null && ownAccuracy != null && !r.is_correct && accuracy > ownAccuracy;
-    return { ...r, isOutlier };
-  });
+  const students = attachQuestionStudentInsights(rows, accuracy, ownAccuracyByRoll);
 
   res.json({ avgTimeMs, accuracy, students });
 });
 
-// 정답률/총 소요시간이 학급 평균에서 크게 벗어난 학생을 표시한다.
-// 표본이 너무 적으면(4명 미만) 평균/표준편차가 의미 없으므로 계산을 건너뛴다.
-function attachOutliers(sessions) {
-  const submitted = sessions.filter((s) => s.status === 'submitted');
-  sessions.forEach((s) => {
-    s.isOutlier = false;
-    s.outlierReasons = [];
-  });
-  if (submitted.length < 4) return;
+// SessionReview(학생 한 명 × 시험 한 번 상세 복습 화면)에서 "빠르게 풀고 틀림"/"오래
+// 고민하고 틀림" 배지를 보여주기 위한 것. 위 breakdown과 같은 판정 로직을 문항마다
+// 반복 호출하지 않고, 이 세션 하나에 필요한 결과만 한 번에 계산해 돌려준다.
+sessionsRouter.get('/:id/sessions/:sessionId/question-insights', requireAuth, async (req, res) => {
+  const examId = Number(req.params.id);
+  const sessionId = Number(req.params.sessionId);
+  const session = await getSessionOr404(examId, sessionId, res);
+  if (!session) return;
 
-  const scorePct = (s) => (s.max_score ? s.score / s.max_score : 0);
-  const mean = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
-  const stddev = (arr, m) => Math.sqrt(arr.reduce((a, b) => a + (b - m) ** 2, 0) / arr.length);
+  const allRows = await repo.getExamQuestionStudentBreakdown(examId);
+  const { sessions } = await repo.getResultsForExam(examId);
+  const ownAccuracyByRoll = new Map(
+    sessions
+      .filter((s) => s.status === 'submitted')
+      .map((s) => [s.roll_number, s.max_score ? s.score / s.max_score : 0]),
+  );
 
-  const scores = submitted.map(scorePct);
-  const times = submitted.map((s) => s.total_time_ms);
-  const scoreMean = mean(scores);
-  const scoreSd = stddev(scores, scoreMean);
-  const timeMean = mean(times);
-  const timeSd = stddev(times, timeMean);
+  const byQuestion = new Map();
+  for (const row of allRows) {
+    if (!byQuestion.has(row.question_id)) byQuestion.set(row.question_id, { orderIndex: row.order_index, rows: [] });
+    byQuestion.get(row.question_id).rows.push(row);
+  }
 
-  submitted.forEach((s) => {
-    const reasons = [];
-    if (scoreSd > 0 && scorePct(s) < scoreMean - 1.5 * scoreSd) reasons.push('정답률이 낮음');
-    if (timeSd > 0 && s.total_time_ms > timeMean + 1.5 * timeSd) reasons.push('소요시간이 김');
-    if (timeSd > 0 && s.total_time_ms < timeMean - 1.5 * timeSd) reasons.push('소요시간이 짧음');
-    if (reasons.length > 0) {
-      s.isOutlier = true;
-      s.outlierReasons = reasons;
+  const result = [];
+  for (const { orderIndex, rows } of byQuestion.values()) {
+    const answeredCount = rows.length;
+    const correctCount = rows.filter((r) => r.is_correct).length;
+    const accuracy = answeredCount > 0 ? correctCount / answeredCount : null;
+    const students = attachQuestionStudentInsights(rows, accuracy, ownAccuracyByRoll);
+    const mine = students.find((s) => s.roll_number === session.roll_number);
+    if (mine?.isOutlier) {
+      result.push({ order_index: orderIndex, outlierReason: mine.outlierReason });
     }
-  });
-}
+  }
+  res.json(result);
+});

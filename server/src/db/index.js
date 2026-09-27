@@ -37,6 +37,20 @@ if (!examColumns.includes('memo')) {
 if (!examColumns.includes('admission_closed')) {
   db.exec('ALTER TABLE exams ADD COLUMN admission_closed INTEGER NOT NULL DEFAULT 0');
 }
+if (!examColumns.includes('supervised_at')) {
+  db.exec('ALTER TABLE exams ADD COLUMN supervised_at TEXT');
+}
+if (!examColumns.includes('supervision_order')) {
+  db.exec('ALTER TABLE exams ADD COLUMN supervision_order INTEGER');
+}
+if (!examColumns.includes('admission_code')) {
+  db.exec('ALTER TABLE exams ADD COLUMN admission_code TEXT');
+}
+// 기능 추가 전에 이미 감독 목록에 올라가 있던 시험도 서버 재시작 직후 바로 입장할 수
+// 있도록 최초 코드만 채운다. 이후 발급·재발급은 crypto.randomInt를 사용한다.
+db.exec(`UPDATE exams
+  SET admission_code = printf('%06d', (abs(random()) % 900000) + 100000)
+  WHERE supervised_at IS NOT NULL AND ends_at IS NULL AND admission_code IS NULL`);
 
 const sessionColumns = db.prepare('PRAGMA table_info(exam_sessions)').all().map((c) => c.name);
 if (!sessionColumns.includes('extra_time_sec')) {
@@ -59,6 +73,9 @@ const questionColumns = db.prepare('PRAGMA table_info(questions)').all().map((c)
 if (!questionColumns.includes('prompt_image_path')) {
   db.exec('ALTER TABLE questions ADD COLUMN prompt_image_path TEXT');
 }
+if (!questionColumns.includes('source_image_path')) {
+  db.exec('ALTER TABLE questions ADD COLUMN source_image_path TEXT');
+}
 if (!questionColumns.includes('ai_standard_candidates')) {
   db.exec('ALTER TABLE questions ADD COLUMN ai_standard_candidates TEXT');
 }
@@ -66,4 +83,12 @@ if (!questionColumns.includes('ai_standard_candidates')) {
 const answerColumns = db.prepare('PRAGMA table_info(answers)').all().map((c) => c.name);
 if (!answerColumns.includes('strokes_json')) {
   db.exec('ALTER TABLE answers ADD COLUMN strokes_json TEXT');
+}
+
+const reviewAssignmentColumns = db.prepare('PRAGMA table_info(review_assignments)').all().map((c) => c.name);
+if (!reviewAssignmentColumns.includes('recovery_code_hash')) {
+  db.exec('ALTER TABLE review_assignments ADD COLUMN recovery_code_hash TEXT');
+}
+if (!reviewAssignmentColumns.includes('recovery_code_expires_at')) {
+  db.exec('ALTER TABLE review_assignments ADD COLUMN recovery_code_expires_at TEXT');
 }

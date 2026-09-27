@@ -32,6 +32,7 @@ export interface Question {
   type: QuestionType;
   prompt: string;
   prompt_image_path: string | null;
+  source_image_path: string | null;
   points: number;
   correct_short_answers: string[] | null;
   ai_suggested: boolean;
@@ -51,6 +52,9 @@ export interface Exam {
   mode: ExamMode;
   status: ExamStatus;
   memo: string | null;
+  supervised_at: string | null;
+  supervision_order: number | null;
+  admission_code: string | null;
   started_at: string | null;
   ends_at: string | null;
   created_at: string;
@@ -140,10 +144,27 @@ export interface PendingQuestionsResponse {
   questions: PublicQuestion[];
 }
 
+export interface ReviewQuestionsResponse {
+  exam_title: string;
+  assignment: {
+    id: number;
+    status: 'assigned' | 'in_progress' | 'completed';
+    current_index: number;
+  };
+  questions: PublicQuestion[];
+  answers: { question_id: number; order_index: number; is_correct: number }[];
+}
+
 export interface RosterEntry {
   id: number;
   roll_number: number;
   name: string | null;
+}
+
+export interface ChoiceDistributionEntry {
+  choice_id: number;
+  count: number;
+  high_scorer_count: number;
 }
 
 export interface QuestionStat {
@@ -153,6 +174,12 @@ export interface QuestionStat {
   answered_count: number;
   correct_count: number;
   avg_time_spent_ms: number | null;
+  median_time_spent_ms: number | null;
+  time_iqr_ms: number | null;
+  insight_codes: string[];
+  insight_reasons: string[];
+  discrimination: number | null;
+  choice_distribution: ChoiceDistributionEntry[];
 }
 
 export interface StandardAccuracy {
@@ -165,6 +192,7 @@ export interface StandardAccuracy {
   correct_count: number;
   accuracy: number;
   avg_time_spent_ms: number | null;
+  latest_attempted_at: string | null;
 }
 
 // 성취기준별 리포트의 "정답률 변화 추이" 차트 한 점 = 시험(응시) 하나.
@@ -178,7 +206,22 @@ export interface StandardsTrendPoint {
   avg_time_spent_ms: number | null;
 }
 
+// 학생별 리포트 전용 - 여러 시험에 걸쳐 반복되는 성취기준별 약점('weak')이나 최근 뚜렷한
+// 개선('improved')이 있을 때만 나타난다(최근 3개 시험 전부가 조건을 만족해야 함).
+export interface StandardWeaknessPattern {
+  code: string;
+  statement: string;
+  subject_id: string;
+  subject_name: string;
+  kind: 'weak' | 'improved';
+  examCount: number;
+  cumulativeAttempted: number;
+  recentAccuracies: number[];
+  recentGapsPct: number[] | null;
+}
+
 export interface QuestionStudentAnswer {
+  session_id: number;
   roll_number: number;
   name: string | null;
   is_correct: number;
@@ -186,9 +229,15 @@ export interface QuestionStudentAnswer {
   selected_choice_id: number | null;
   selected_choice_text: string | null;
   short_answer_text: string | null;
-  // 반 정답률 80%+ 인 문항을 평균 이하 시간에 풀고도 틀린 경우 true - 교사가 부주의한
-  // 실수인지 짚어볼 만해서 표시한다.
   isOutlier: boolean;
+  outlierReason: string | null;
+}
+
+// SessionReview에서 "빠르게 풀고 틀림"/"오래 고민하고 틀림" 배지를 붙이기 위한 것 - 이
+// 세션에서 실제로 이상치로 판정된 문항만 담겨 온다(해당 없으면 배열에서 아예 빠짐).
+export interface SessionQuestionOutlier {
+  order_index: number;
+  outlierReason: string;
 }
 
 export interface QuestionBreakdown {
@@ -206,6 +255,11 @@ export interface ExamResultSession {
   max_score: number | null;
   submitted_at: string | null;
   total_time_ms: number;
+  review_status: 'assigned' | 'in_progress' | 'completed' | null;
+  review_completed_at: string | null;
+  review_total: number;
+  review_answered: number;
+  review_correct: number;
   isOutlier: boolean;
   outlierReasons: string[];
 }
@@ -243,6 +297,7 @@ export interface ExamMonitorData {
     started_at: string | null;
     ends_at: string | null;
     admission_closed: boolean;
+    admission_code: string | null;
   };
   students: MonitorStudent[];
 }

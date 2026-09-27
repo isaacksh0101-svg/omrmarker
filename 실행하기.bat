@@ -95,11 +95,6 @@ if "%NEED_INSTALL%"=="1" (
     )
 )
 
-REM 바탕화면에 예쁜 아이콘 바로가기를 만들어둔다(처음 한 번은 이 파일을 직접 더블클릭해야 하지만,
-REM 그 다음부터는 바탕화면 아이콘으로 실행할 수 있게). 폴더를 어디로 옮기거나 다른 PC에서 실행해도
-REM %~f0/%~dp0는 항상 "지금 이 파일이 실제로 있는 위치"를 가리키므로 매번 다시 만들어도 항상 정확하다.
-powershell -NoProfile -Command "$s = (New-Object -ComObject WScript.Shell).CreateShortcut(\"$env:USERPROFILE\Desktop\ScoreLab.lnk\"); $s.TargetPath = '%~f0'; $s.WorkingDirectory = '%~dp0'; $s.IconLocation = \"$env:SystemRoot\System32\shell32.dll,13\"; $s.Description = 'ScoreLab 실행'; $s.Save()" >nul 2>&1
-
 echo [ScoreLab] 시험지/학생 화면을 준비합니다(처음 실행이면 시간이 좀 더 걸릴 수 있어요).
 echo 이 창을 닫으면 프로그램도 종료됩니다.
 echo.

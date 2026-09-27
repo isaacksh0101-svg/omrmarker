@@ -19,6 +19,8 @@ export function AiAnswerUploadPanel({ examId, onFilled }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AiExtractAnswersResponse | null>(null);
+  const [provider, setProvider] = useState<'gemini' | 'upstage'>('gemini');
+  const upstageExpired = Date.now() >= Date.UTC(2027, 2, 20);
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -30,6 +32,7 @@ export function AiAnswerUploadPanel({ examId, onFilled }: Props) {
     try {
       const formData = new FormData();
       formData.append('file', file);
+      formData.append('provider', provider);
       const res = await api.postForm<AiExtractAnswersResponse>(`/exams/${examId}/ai-extract-answers`, formData);
       setResult(res);
       onFilled();
@@ -49,6 +52,15 @@ export function AiAnswerUploadPanel({ examId, onFilled }: Props) {
         뒤에도 아래 표에서 확인하고 수정할 수 있습니다.
       </p>
       <div className="mt-3 flex items-center gap-2">
+        <select
+          value={provider}
+          onChange={(e) => setProvider(e.target.value as 'gemini' | 'upstage')}
+          disabled={loading}
+          className="rounded-xl border border-line bg-white px-3 py-2.5 text-sm text-ink"
+        >
+          <option value="gemini">Gemini 직접 분석</option>
+          <option value="upstage" disabled={upstageExpired}>Upstage Document Parse + Solar Pro 3</option>
+        </select>
         <input
           ref={fileInputRef}
           type="file"
@@ -62,6 +74,12 @@ export function AiAnswerUploadPanel({ examId, onFilled }: Props) {
         </Button>
         {fileName && <span className="text-xs text-ink-soft">{fileName}</span>}
       </div>
+      {provider === 'upstage' && !upstageExpired && (
+        <p className="mt-2 text-[11px] text-ink-soft">
+          Upstage가 문서를 판독하고 Solar Pro 3가 정답을 정리합니다. 2027년 3월 19일까지 사용할 수 있습니다.
+        </p>
+      )}
+      {upstageExpired && <p className="mt-2 text-[11px] font-bold text-danger">Upstage 옵션 사용 기간이 종료되었습니다.</p>}
       {error && <p className="mt-2 text-xs font-bold text-danger">{error}</p>}
       {result && (
         <p className="mt-2 text-xs font-bold text-ink">

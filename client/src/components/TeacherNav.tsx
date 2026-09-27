@@ -4,14 +4,17 @@ import { IconBackup, IconChart, IconDashboard, IconDocument, IconMonitor, IconSe
 
 const NAV_ITEMS = [
   { to: '/', label: '시험지 만들기', icon: IconDashboard, end: true },
-  { to: '/exam-reports', label: '시험지 관리', icon: IconDocument, end: false },
+  { to: '/exam-management', label: '시험지 관리', icon: IconDocument, end: false },
   { to: '/exam-monitor', label: '시험 감독', icon: IconMonitor, end: false },
-  { to: '/roster', label: '학생 관리', icon: IconUsers, end: false },
-  { to: '/standards-report', label: '학생별 리포트', icon: IconChart, end: false },
+  { to: '/exam-reports', label: '시험별 분석', icon: IconChart, end: false },
+  { to: '/standards-report', label: '학생별 분석', icon: IconChart, end: false },
 ];
 
-const SETTINGS_ITEM = { to: '/settings', label: '환경설정', icon: IconSettings, end: false };
-const DATA_ITEM = { to: '/data-management', label: '데이터 관리', icon: IconBackup, end: false };
+const UTILITY_ITEMS = [
+  { to: '/settings', label: '환경설정', icon: IconSettings, end: false },
+  { to: '/roster', label: '학생 관리', icon: IconUsers, end: false },
+  { to: '/data-management', label: '데이터 관리', icon: IconBackup, end: false },
+];
 
 function navLinkClass(isActive: boolean) {
   return `group relative flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-bold transition-all duration-200 ${
@@ -67,37 +70,19 @@ export function TeacherNav() {
 
         <div className="mx-2 my-3 h-px bg-blue-100/90" />
 
-        <NavLink
-          to={SETTINGS_ITEM.to}
-          end={SETTINGS_ITEM.end}
-          className={({ isActive }) => navLinkClass(isActive)}
-        >
-          {({ isActive }) => (
-            <>
-              <span className={navIconClass(isActive)}>
-                <SETTINGS_ITEM.icon className="h-[18px] w-[18px]" />
-              </span>
-              <span>{SETTINGS_ITEM.label}</span>
-              {isActive && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-[#08b9e8]" />}
-            </>
-          )}
-        </NavLink>
-
-        <NavLink
-          to={DATA_ITEM.to}
-          end={DATA_ITEM.end}
-          className={({ isActive }) => navLinkClass(isActive)}
-        >
-          {({ isActive }) => (
-            <>
-              <span className={navIconClass(isActive)}>
-                <DATA_ITEM.icon className="h-[18px] w-[18px]" />
-              </span>
-              <span>{DATA_ITEM.label}</span>
-              {isActive && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-[#08b9e8]" />}
-            </>
-          )}
-        </NavLink>
+        {UTILITY_ITEMS.map(({ to, label, icon: Icon, end }) => (
+          <NavLink key={to} to={to} end={end} className={({ isActive }) => navLinkClass(isActive)}>
+            {({ isActive }) => (
+              <>
+                <span className={navIconClass(isActive)}>
+                  <Icon className="h-[18px] w-[18px]" />
+                </span>
+                <span>{label}</span>
+                {isActive && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-[#08b9e8]" />}
+              </>
+            )}
+          </NavLink>
+        ))}
 
         <div className="mt-auto border-t border-blue-100/90 pt-4">
           <button
