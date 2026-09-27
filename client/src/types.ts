@@ -260,6 +260,7 @@ export interface ExamResultSession {
   review_total: number;
   review_answered: number;
   review_correct: number;
+  review_max_attempts: number | null;
   isOutlier: boolean;
   outlierReasons: string[];
 }

@@ -105,6 +105,7 @@ interface ReviewDetail {
     review_choice_text: string | null;
     review_short_answer: string | null;
     review_is_correct: number | null;
+    review_attempts: number | null;
   }>;
 }
 
@@ -615,7 +616,7 @@ export function ExamResults() {
         <>
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-line text-left text-xs font-bold text-ink-soft">
+            <tr className="border-b border-line text-center text-xs font-bold text-ink-soft">
               <th className="whitespace-nowrap px-3 py-2.5">번호</th>
               <th className="whitespace-nowrap px-3 py-2.5">이름</th>
               <th className="whitespace-nowrap px-3 py-2.5">상태</th>
@@ -629,7 +630,7 @@ export function ExamResults() {
             {pagedSessions.map((s) => (
               <tr
                 key={s.roll_number}
-                className={`border-b border-line last:border-0 ${
+                className={`border-b border-line text-center last:border-0 ${
                   s.session_id != null ? 'cursor-pointer hover:bg-bg' : ''
                 }`}
                 onClick={() => s.session_id != null && navigate(`/exams/${id}/sessions/${s.session_id}`)}
@@ -648,11 +649,18 @@ export function ExamResults() {
                 </td>
                 <td className="whitespace-nowrap px-3 py-2.5">
                   {s.session_id != null && (s.status === 'submitted' || s.status === 'force_submitted') && (
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center justify-center gap-1.5">
                       {s.review_status ? (
-                        <button type="button" className="rounded-lg bg-good/10 px-2.5 py-1.5 text-xs font-bold text-good hover:bg-good/20" onClick={(event) => { event.stopPropagation(); openReviewDetail(s.session_id!, s.roll_number); }}>
-                          {s.review_status === 'completed' ? `완료 ${s.review_correct}/${s.review_total}` : s.review_status === 'in_progress' ? `진행 ${s.review_answered}/${s.review_total}` : `미시작 0/${s.review_total}`}
-                        </button>
+                        <>
+                          <button type="button" className="rounded-lg bg-good/10 px-2.5 py-1.5 text-xs font-bold text-good hover:bg-good/20" onClick={(event) => { event.stopPropagation(); openReviewDetail(s.session_id!, s.roll_number); }}>
+                            {s.review_status === 'completed' ? `완료 ${s.review_correct}/${s.review_total}` : s.review_status === 'in_progress' ? `진행 ${s.review_answered}/${s.review_total}` : `미시작 0/${s.review_total}`}
+                          </button>
+                          {s.review_max_attempts != null && s.review_max_attempts >= 2 && (
+                            <Badge tone="warn" title="한 번에 못 맞힌 문항이 있어요 - 찍어서 맞혔을 수도 있으니 눌러서 확인해보세요.">
+                              최다 {s.review_max_attempts}회
+                            </Badge>
+                          )}
+                        </>
                       ) : <span className="text-xs text-ink-soft">오답 없음</span>}
                     </div>
                   )}
@@ -684,6 +692,9 @@ export function ExamResults() {
             return <div key={question.question_id} className="flex items-center gap-3 py-3 text-sm">
               <span className="w-12 shrink-0 font-bold text-ink">{question.order_index + 1}번</span>
               <div className="min-w-0 flex-1"><p className="truncate text-xs text-ink-soft">최초: {original}</p><p className="truncate font-bold text-ink">재풀이: {reviewed}</p></div>
+              {question.review_attempts != null && question.review_attempts >= 2 && (
+                <span className="shrink-0 text-xs font-bold text-warn" title="찍어서 맞혔을 수도 있어요.">{question.review_attempts}회 시도</span>
+              )}
               {question.review_is_correct == null ? <Badge tone="neutral">미완료</Badge> : <Badge tone={question.review_is_correct ? 'good' : 'danger'}>{question.review_is_correct ? '교정 완료' : '재오답'}</Badge>}
             </div>;
           })}</div>

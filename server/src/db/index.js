@@ -92,3 +92,8 @@ if (!reviewAssignmentColumns.includes('recovery_code_hash')) {
 if (!reviewAssignmentColumns.includes('recovery_code_expires_at')) {
   db.exec('ALTER TABLE review_assignments ADD COLUMN recovery_code_expires_at TEXT');
 }
+
+const reviewAnswerColumns = db.prepare('PRAGMA table_info(review_answers)').all().map((c) => c.name);
+if (!reviewAnswerColumns.includes('attempts')) {
+  db.exec('ALTER TABLE review_answers ADD COLUMN attempts INTEGER NOT NULL DEFAULT 1');
+}

@@ -643,7 +643,8 @@ sessionsRouter.get('/:id/review', async (req, res) => {
     .filter((q) => assignedIds.has(q.id))
     .map((q) => sanitizeQuestionForStudent(q, exam.mode));
   const answers = await repo.getReviewAnswerSummary(assignment.id);
-  res.json({ exam_title: exam.title, assignment: { ...assignment, status: answers.length >= questions.length ? 'completed' : assignment.status }, questions, answers });
+  const correctCount = answers.filter((a) => a.is_correct).length;
+  res.json({ exam_title: exam.title, assignment: { ...assignment, status: correctCount >= questions.length ? 'completed' : assignment.status }, questions, answers });
 });
 
 sessionsRouter.post('/:id/review/answer', async (req, res) => {
@@ -680,7 +681,7 @@ sessionsRouter.post('/:id/review/answer', async (req, res) => {
     isCorrect,
   });
   const answers = await repo.getReviewAnswerSummary(assignment.id);
-  res.json({ done: updated.status === 'completed', answered_count: answers.length });
+  res.json({ is_correct: isCorrect, done: updated.status === 'completed', answered_count: answers.length });
 });
 
 // ---- 교사용: 시험 감독(실시간 모니터링) ----

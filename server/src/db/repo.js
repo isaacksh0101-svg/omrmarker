@@ -601,20 +601,24 @@ export async function startReviewAssignment(assignmentId) {
 
 export async function saveReviewAnswer(assignmentId, questionId, { selectedChoiceId, shortAnswerText, isCorrect }) {
   db.prepare(`INSERT INTO review_answers
-    (assignment_id, question_id, selected_choice_id, short_answer_text, is_correct, answered_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    (assignment_id, question_id, selected_choice_id, short_answer_text, is_correct, answered_at, attempts)
+    VALUES (?, ?, ?, ?, ?, ?, 1)
     ON CONFLICT(assignment_id, question_id) DO UPDATE SET
       selected_choice_id = excluded.selected_choice_id, short_answer_text = excluded.short_answer_text,
-      is_correct = excluded.is_correct, answered_at = excluded.answered_at`)
+      is_correct = excluded.is_correct, answered_at = excluded.answered_at,
+      attempts = review_answers.attempts + 1`)
     .run(assignmentId, questionId, selectedChoiceId ?? null, shortAnswerText ?? null, isCorrect ? 1 : 0, now());
+  // 오답이면 그 문항은 다음으로 안 넘어가고 맞을 때까지 다시 시도하게 하므로(학생 화면에서
+  // 강제), "완료"는 답을 낸 개수가 아니라 "정답을 맞힌" 개수로 판단한다 - 같은 문항을 계속
+  // 다시 제출해도 UPSERT라 행은 하나뿐이고, 그 행의 is_correct가 최종적으로 맞았는지만 본다.
   const total = db.prepare('SELECT COUNT(*) AS count FROM review_assignment_questions WHERE assignment_id = ?').get(assignmentId).count;
-  const answered = db.prepare('SELECT COUNT(*) AS count FROM review_answers WHERE assignment_id = ?').get(assignmentId).count;
-  if (answered >= total) {
+  const correct = db.prepare('SELECT COUNT(*) AS count FROM review_answers WHERE assignment_id = ? AND is_correct = 1').get(assignmentId).count;
+  if (correct >= total) {
     db.prepare("UPDATE review_assignments SET status = 'completed', current_index = ?, completed_at = ? WHERE id = ?")
       .run(total, now(), assignmentId);
   } else {
     db.prepare("UPDATE review_assignments SET status = 'in_progress', current_index = ? WHERE id = ?")
-      .run(answered, assignmentId);
+      .run(correct, assignmentId);
   }
   return getReviewAssignmentBySession(
     db.prepare('SELECT session_id FROM review_assignments WHERE id = ?').get(assignmentId).session_id,
@@ -633,6 +637,7 @@ export async function getReviewAssignmentDetail(assignmentId) {
       original.is_correct AS original_is_correct,
       review.selected_choice_id AS review_choice_id, review.short_answer_text AS review_short_answer,
       review.is_correct AS review_is_correct, review.answered_at AS review_answered_at,
+      review.attempts AS review_attempts,
       original_choice.text AS original_choice_text, review_choice.text AS review_choice_text
     FROM review_assignment_questions assigned
     JOIN questions q ON q.id = assigned.question_id
@@ -917,7 +922,8 @@ export async function getResultsForExam(examId) {
               review.status AS review_status, review.completed_at AS review_completed_at,
               (SELECT COUNT(*) FROM review_assignment_questions raq WHERE raq.assignment_id = review.id) AS review_total,
               (SELECT COUNT(*) FROM review_answers ra WHERE ra.assignment_id = review.id) AS review_answered,
-              (SELECT COUNT(*) FROM review_answers ra WHERE ra.assignment_id = review.id AND ra.is_correct = 1) AS review_correct
+              (SELECT COUNT(*) FROM review_answers ra WHERE ra.assignment_id = review.id AND ra.is_correct = 1) AS review_correct,
+              (SELECT MAX(ra.attempts) FROM review_answers ra WHERE ra.assignment_id = review.id) AS review_max_attempts
        FROM exam_sessions es
        LEFT JOIN roster r ON r.roll_number = es.roll_number
        LEFT JOIN review_assignments review ON review.session_id = es.id

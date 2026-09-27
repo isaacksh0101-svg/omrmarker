@@ -46,6 +46,9 @@ export function ReviewMistakes() {
   const [shortAnswer, setShortAnswer] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 방금 낸 답이 틀렸다는 걸 보여주는 표시 - 오답이면 다음 문항으로 넘기지 않고 같은
+  // 문항에 머물러서, 맞힐 때까지 다시 고르게 한다.
+  const [wrongFeedback, setWrongFeedback] = useState(false);
   const [penTool, setPenTool] = useState<PenTool>('pen');
   const [penColor, setPenColor] = useState(PEN_COLORS[0]);
   // 기기를 공유하는 교실 특성상 저장해두지 않는다 - 매번 펜 모드로 새로 시작한다(TakeExam과 동일).
@@ -70,19 +73,24 @@ export function ReviewMistakes() {
     api.get<ReviewQuestionsResponse>(`/exams/${id}/review?access_token=${encodeURIComponent(accessToken)}`)
       .then((result) => {
         setData(result);
-        setIndex(Math.min(result.answers.length, Math.max(0, result.questions.length - 1)));
+        // 맞을 때까지 다시 풀어야 하므로, 이어서 시작할 위치는 "아직 정답을 못 맞힌" 첫
+        // 문항이다(단순히 답을 낸 개수가 아니라).
+        const correctIds = new Set(result.answers.filter((a) => a.is_correct).map((a) => a.question_id));
+        const firstUnsolved = result.questions.findIndex((q) => !correctIds.has(q.id));
+        setIndex(firstUnsolved === -1 ? Math.max(0, result.questions.length - 1) : firstUnsolved);
       })
       .catch((cause) => setError(cause instanceof ApiError ? cause.message : '오답 재풀이를 불러오지 못했습니다.'));
   }, [id, accessToken]);
 
-  const completed = data?.assignment.status === 'completed' || (!!data && data.answers.length >= data.questions.length);
-  const question = data?.questions[index];
   const correctCount = useMemo(() => data?.answers.filter((answer) => !!answer.is_correct).length ?? 0, [data]);
+  const completed = data?.assignment.status === 'completed' || (!!data && correctCount >= data.questions.length);
+  const question = data?.questions[index];
   const canSubmit = question?.type === 'mc' ? selectedChoice != null : shortAnswer.trim().length > 0;
 
   useEffect(() => {
     penRef.current?.clear();
     setFloatPos(null);
+    setWrongFeedback(false);
   }, [question?.id]);
 
   useEffect(() => {
@@ -93,7 +101,11 @@ export function ReviewMistakes() {
     const observer = new ResizeObserver(measure);
     observer.observe(panel);
     return () => observer.disconnect();
-  }, [question?.id]);
+    // started가 true로 바뀌어야 이 패널이 실제로 마운트된다(그 전엔 "시작하기" 게이트
+    // 화면이라 floatRef가 아직 null) - started를 의존성에서 빼면 게이트를 넘어간 뒤에도
+    // 이 effect가 다시 안 돌아서 floatSize가 0으로 남고, 그 결과 세로 위치 계산이 패널을
+    // 화면 아래로 밀어내 안 보이게 된다(TakeExam.tsx도 examStarted를 넣어 같은 문제를 피함).
+  }, [question?.id, started]);
 
   function dragStart(event: React.PointerEvent) {
     const rect = floatRef.current?.getBoundingClientRect();
@@ -116,12 +128,23 @@ export function ReviewMistakes() {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.post<{ done: boolean; answered_count: number }>(`/exams/${id}/review/answer`, {
-        access_token: accessToken,
-        question_id: question.id,
-        selected_choice_id: selectedChoice,
-        short_answer_text: shortAnswer,
-      });
+      const result = await api.post<{ is_correct: boolean; done: boolean; answered_count: number }>(
+        `/exams/${id}/review/answer`,
+        {
+          access_token: accessToken,
+          question_id: question.id,
+          selected_choice_id: selectedChoice,
+          short_answer_text: shortAnswer,
+        },
+      );
+      if (!result.is_correct) {
+        // 틀렸으면 다음으로 넘어가지 않고 같은 문항에 머문다 - 선택은 비워서 다시 고르게 한다.
+        setWrongFeedback(true);
+        setSelectedChoice(null);
+        setShortAnswer('');
+        return;
+      }
+      setWrongFeedback(false);
       if (result.done) {
         const refreshed = await api.get<ReviewQuestionsResponse>(`/exams/${id}/review?access_token=${encodeURIComponent(accessToken)}`);
         setData(refreshed);
@@ -220,8 +243,9 @@ export function ReviewMistakes() {
     </div>
     <div ref={floatRef} className="fixed z-20 flex max-w-[calc(100vw-16px)] flex-wrap items-center gap-2 rounded-2xl border border-line bg-panel px-4 py-3 shadow-lg" style={{ left: panelPosition.x, top: panelPosition.y }}>
       <button type="button" aria-label="답안 입력창 위치 옮기기" className="-ml-1 flex h-7 w-6 touch-none items-center justify-center text-ink-soft" onPointerDown={dragStart} onPointerMove={dragMove} onPointerUp={() => { dragRef.current = null; }} onPointerCancel={() => { dragRef.current = null; }}><IconGrip className="h-4 w-4" /></button>
-      {question.type === 'short' && <input value={shortAnswer} onChange={(event) => setShortAnswer(event.target.value)} placeholder="정답 입력" className="w-full min-w-0 rounded-xl border border-line bg-bg px-4 py-2.5 text-lg outline-none focus:border-accent sm:w-[28rem]" />}
-      {question.type === 'mc' && <div className="flex flex-wrap gap-2">{question.choices.map((choice, choiceIndex) => <button key={choice.id} onClick={() => setSelectedChoice(choice.id)} className={`${question.prompt_image_path ? 'h-11 w-11 rounded-full text-center' : 'rounded-xl px-3.5 py-2.5 text-left'} border text-base font-bold ${selectedChoice === choice.id ? 'border-accent bg-accent-soft text-accent-ink' : 'border-line bg-panel text-ink'}`}>{question.prompt_image_path ? choiceIndex + 1 : <MathText text={choice.text} />}</button>)}</div>}
+      {wrongFeedback && <p className="w-full text-sm font-bold text-danger">오답이에요. 다시 골라보세요.</p>}
+      {question.type === 'short' && <input value={shortAnswer} onChange={(event) => { setShortAnswer(event.target.value); setWrongFeedback(false); }} placeholder="정답 입력" className="w-full min-w-0 rounded-xl border border-line bg-bg px-4 py-2.5 text-lg outline-none focus:border-accent sm:w-[28rem]" />}
+      {question.type === 'mc' && <div className="flex flex-wrap gap-2">{question.choices.map((choice, choiceIndex) => <button key={choice.id} onClick={() => { setSelectedChoice(choice.id); setWrongFeedback(false); }} className={`${question.prompt_image_path ? 'h-11 w-11 rounded-full text-center' : 'rounded-xl px-3.5 py-2.5 text-left'} border text-base font-bold ${selectedChoice === choice.id ? 'border-accent bg-accent-soft text-accent-ink' : 'border-line bg-panel text-ink'}`}>{question.prompt_image_path ? choiceIndex + 1 : <MathText text={choice.text} />}</button>)}</div>}
       <Button className="text-base" disabled={!canSubmit || submitting} onClick={submit}>{submitting ? '제출 중...' : index + 1 === data.questions.length ? '재풀이 제출' : '다음'}</Button>
       {error && <p className="w-full text-xs font-bold text-danger">{error}</p>}
     </div>

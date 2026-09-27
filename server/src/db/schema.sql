@@ -169,6 +169,9 @@ CREATE TABLE IF NOT EXISTS review_answers (
   short_answer_text TEXT,
   is_correct INTEGER NOT NULL,
   answered_at TEXT NOT NULL,
+  -- 맞을 때까지 다시 제출하는 구조라 이 행은 문항당 하나로 계속 덮어써진다 - 몇 번째
+  -- 제출인지는 여기에 따로 세어 교사가 "찍어서 맞혔는지"를 짐작할 수 있게 한다.
+  attempts INTEGER NOT NULL DEFAULT 1,
   UNIQUE(assignment_id, question_id)
 );
 
