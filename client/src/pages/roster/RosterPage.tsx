@@ -1,12 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
-import * as XLSX from 'xlsx';
+import { useEffect, useState } from 'react';
 import { api, ApiError } from '../../api/client';
 import type { RosterEntry } from '../../types';
 import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
 import { PageHeader } from '../../components/PageHeader';
 import { IconUsers } from '../../components/icons';
-import { downloadWorkbook } from '../../lib/exportXlsx';
 
 interface IncompleteReview {
   assignment_id: number;
@@ -46,8 +44,6 @@ export function RosterPage() {
   const [saving, setSaving] = useState(false);
   const [bulkCount, setBulkCount] = useState('');
   const [bulkSaving, setBulkSaving] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
   const [selectedRolls, setSelectedRolls] = useState<Set<number>>(new Set());
   const [deletingLearningData, setDeletingLearningData] = useState(false);
   const [learningDataDeleteMode, setLearningDataDeleteMode] = useState(false);
@@ -55,7 +51,6 @@ export function RosterPage() {
   const [incompleteReviews, setIncompleteReviews] = useState<IncompleteReview[]>([]);
   const [recoveryCode, setRecoveryCode] = useState<{ code: string; expires_at: string; exam_title?: string; count?: number } | null>(null);
   const [issuingAll, setIssuingAll] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   function reload() {
     api.get<RosterEntry[]>('/roster').then(setRoster);
@@ -159,18 +154,6 @@ export function RosterPage() {
     setLearningDataDeleteMode(false);
   }
 
-  function downloadTemplate() {
-    downloadWorkbook('학생명단_양식.xlsx', [
-      {
-        name: '학생명단',
-        rows: [
-          { 번호: 1, 이름: '홍길동' },
-          { 번호: 2, 이름: '' },
-        ],
-      },
-    ]);
-  }
-
   async function openRecovery(student: RosterEntry) {
     setRecoveryStudent(student);
     setRecoveryCode(null);
@@ -189,35 +172,6 @@ export function RosterPage() {
       setRecoveryCode(result);
     } finally {
       setIssuingAll(false);
-    }
-  }
-
-  async function handleUploadFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    setUploadError(null);
-    setUploading(true);
-    try {
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: 'array' });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet);
-      if (rows.length === 0) throw new Error('엑셀 파일에서 읽을 수 있는 행이 없습니다.');
-      let count = 0;
-      for (const row of rows) {
-        const roll = Number(row['번호'] ?? row['출석번호']);
-        if (!Number.isInteger(roll) || roll <= 0) continue;
-        const rowName = String(row['이름'] ?? '').trim();
-        await api.post('/roster', { roll_number: roll, name: rowName || null });
-        count += 1;
-      }
-      if (count === 0) throw new Error('"번호" 열을 찾을 수 없습니다. 양식을 다운로드해서 확인해주세요.');
-      reload();
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : '엑셀 업로드 중 오류가 발생했습니다.');
-    } finally {
-      setUploading(false);
     }
   }
 
@@ -271,27 +225,6 @@ export function RosterPage() {
             </Button>
           </div>
           <p className="mt-1 text-xs text-ink-soft">이미 등록된 번호는 그대로 두고, 없는 번호만 이름 없이 추가합니다.</p>
-        </div>
-
-        <div className="mt-4 border-t border-line pt-4">
-          <span className="text-xs font-bold text-ink-soft">엑셀로 명단 업로드</span>
-          <div className="mt-2 flex items-center gap-2">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".xlsx,.xls"
-              className="hidden"
-              onChange={handleUploadFile}
-            />
-            <Button variant="secondary" disabled={uploading} onClick={() => fileInputRef.current?.click()}>
-              {uploading ? '업로드 중...' : '엑셀 파일 선택'}
-            </Button>
-            <button className="text-xs font-bold text-accent hover:underline" onClick={downloadTemplate}>
-              양식 다운로드
-            </button>
-          </div>
-          <p className="mt-1 text-xs text-ink-soft">"번호", "이름" 두 열로 된 엑셀 파일을 올리면 한 번에 등록됩니다.</p>
-          {uploadError && <p className="mt-2 text-xs font-bold text-danger">{uploadError}</p>}
         </div>
       </Card>
 

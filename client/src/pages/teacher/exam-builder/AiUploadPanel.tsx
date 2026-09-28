@@ -65,7 +65,7 @@ export function AiUploadPanel({ examId, onExtracted }: Props) {
           disabled={loading}
           onClick={() => fileInputRef.current?.click()}
         >
-          {loading ? '분석 중...' : '이미지 선택'}
+          {loading ? '분석 중...' : '파일 가져오기'}
         </Button>
         {fileName && <span className="text-xs text-ink-soft">{fileName}</span>}
       </div>

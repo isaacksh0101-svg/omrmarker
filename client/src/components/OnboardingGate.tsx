@@ -2,12 +2,18 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { api, ApiError } from '../api/client';
 import { Button } from './Button';
 import { Card } from './Card';
+import { LegalDocumentModal, type DocumentKey } from './LegalFooter';
 
 type OnboardingStatus = { completed: boolean };
+
+// InitialSetupGate와 같은 이유 - 이 게이트는 온보딩을 아직 안 거친(기존 설치 업그레이드
+// 포함) 경우에만 보이므로, 여기를 통과했다는 것 자체가 이미 읽었다는 기록이 된다.
+const LEGAL_DOCS: DocumentKey[] = ['data', 'terms'];
 
 export function OnboardingGate({ children }: { children: ReactNode }) {
   const desktop = window.scorelabDesktop;
   const [completed, setCompleted] = useState<boolean | null>(null);
+  const [legalIndex, setLegalIndex] = useState(0);
   const [step, setStep] = useState<1 | 2>(1);
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState('');
@@ -67,6 +73,17 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
 
   if (completed === null) return null;
   if (completed) return <>{children}</>;
+
+  if (legalIndex < LEGAL_DOCS.length) {
+    const isLast = legalIndex === LEGAL_DOCS.length - 1;
+    return (
+      <LegalDocumentModal
+        documentKey={LEGAL_DOCS[legalIndex]}
+        closeLabel={isLast ? '확인했습니다 · 계속하기' : '다음 문서 보기'}
+        onClose={() => setLegalIndex((value) => value + 1)}
+      />
+    );
+  }
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-10">

@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { api, ApiError } from '../api/client';
 import { Button } from './Button';
 import { Card } from './Card';
+import { LegalDocumentModal, type DocumentKey } from './LegalFooter';
 
 type AuthStatus = {
   hasPassword: boolean;
@@ -9,10 +10,16 @@ type AuthStatus = {
   setupToken?: string;
 };
 
+// 데이터 처리 안내와 이용조건은 비밀번호를 설정하기도 전인 이 화면에서부터 순서대로 끝까지
+// 읽게 한다 - 이 게이트는 비밀번호가 없을 때만(최초 설치) 보이므로, 여기를 통과했다는
+// 것 자체가 "이미 한 번 읽었다"는 기록이 되어 따로 서버에 저장해둘 필요가 없다.
+const LEGAL_DOCS: DocumentKey[] = ['data', 'terms'];
+
 export function InitialSetupGate({ children }: { children: ReactNode }) {
   const desktop = window.scorelabDesktop;
   const [status, setStatus] = useState<AuthStatus | null>(null);
   const [ready, setReady] = useState(false);
+  const [legalIndex, setLegalIndex] = useState(0);
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [password, setPassword] = useState('');
@@ -91,6 +98,17 @@ export function InitialSetupGate({ children }: { children: ReactNode }) {
 
   if (ready) return <>{children}</>;
   if (!status) return null;
+
+  if (legalIndex < LEGAL_DOCS.length) {
+    const isLast = legalIndex === LEGAL_DOCS.length - 1;
+    return (
+      <LegalDocumentModal
+        documentKey={LEGAL_DOCS[legalIndex]}
+        closeLabel={isLast ? '확인했습니다 · 계속하기' : '다음 문서 보기'}
+        onClose={() => setLegalIndex((value) => value + 1)}
+      />
+    );
+  }
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-10">

@@ -58,7 +58,7 @@ export function UserGuideContent() {
         </GuideSection>
 
         <GuideSection id="roster" title="2. 학생 명단 준비">
-          <p><Link to="/roster" className="font-bold text-accent-ink underline">학생 관리</Link>에서 직접 추가하거나 Excel 양식을 내려받아 명단을 가져올 수 있습니다. 이름은 선택항목이며 번호만으로도 사용할 수 있습니다.</p>
+          <p><Link to="/roster" className="font-bold text-accent-ink underline">학생 관리</Link>에서 번호를 하나씩 추가하거나, 학생 수만 입력해 한 번에 일괄 생성할 수 있습니다. 이름은 선택항목이며 번호만으로도 사용할 수 있습니다.</p>
           <ul className="list-disc space-y-1 pl-5">
             <li><b className="text-ink">명단 삭제</b>: 명단 행을 삭제합니다. 과거 학습 데이터는 별도로 남을 수 있습니다.</li>
             <li><b className="text-ink">선택한 학습 데이터 삭제</b>: 체크박스로 전체 또는 원하는 학생을 선택해 응시·답안·점수·문항별 시간·필기·화면 이탈 기록을 완전 삭제하고 명단은 유지합니다.</li>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { UserGuideContent } from '../pages/teacher/UserGuidePage';
 
-type DocumentKey = 'data' | 'terms' | 'guide';
+export type DocumentKey = 'data' | 'terms' | 'guide';
 
 const DOCUMENT_TITLES: Record<DocumentKey, string> = {
   data: 'ScoreLab 데이터 처리 및 개인정보 보호 안내',
@@ -120,7 +120,15 @@ function Terms() {
 // 걸지 않는다.
 const REQUIRES_FULL_READ: Record<DocumentKey, boolean> = { data: true, terms: true, guide: false };
 
-function LegalDocumentModal({ documentKey, onClose }: { documentKey: DocumentKey; onClose: () => void }) {
+export function LegalDocumentModal({
+  documentKey,
+  onClose,
+  closeLabel = '닫기',
+}: {
+  documentKey: DocumentKey;
+  onClose: () => void;
+  closeLabel?: string;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const requiresFullRead = REQUIRES_FULL_READ[documentKey];
@@ -204,7 +212,7 @@ function LegalDocumentModal({ documentKey, onClose }: { documentKey: DocumentKey
               onClick={onClose}
               className="shrink-0 rounded-xl bg-accent px-5 py-2.5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-line disabled:text-ink-soft"
             >
-              닫기
+              {closeLabel}
             </button>
           </div>
         </footer>
