@@ -165,11 +165,27 @@ function buildAnswerKeySchema() {
               type: 'STRING',
               description:
                 '객관식이면 정답 보기의 번호(1~보기 개수)를 아라비아 숫자로. ①②③처럼 동그라미 숫자로 ' +
-                '표시돼 있어도 해당 아라비아 숫자로 바꿔 적는다. 단답형이면 정답 텍스트를 그대로 옮기고, ' +
-                '정답이 여러 개 인정되면 쉼표로 구분한다.',
+                '표시돼 있어도 해당 아라비아 숫자로 바꿔 적는다. 정답 번호가 여러 개면(모두 고르기) ' +
+                '쉼표로 구분한다. 단답형이면 정답 텍스트를 그대로 옮기고, ' +
+                '정답이 여러 개 인정되면 쉼표로 구분한다. 서술형이면 모범답안 문장을 그대로 옮긴다.',
+            },
+            keyword_groups: {
+              type: 'ARRAY',
+              description: '서술형 문항만 채운다(다른 문항은 빈 배열). 채점 핵심 내용마다 한 항목.',
+              items: {
+                type: 'OBJECT',
+                properties: {
+                  keywords: {
+                    type: 'ARRAY',
+                    description: '같은 뜻으로 인정할 표현들. 첫 번째가 대표 표현.',
+                    items: { type: 'STRING' },
+                  },
+                },
+                required: ['keywords'],
+              },
             },
           },
-          required: ['question_number', 'answer'],
+          required: ['question_number', 'answer', 'keyword_groups'],
         },
       },
     },
@@ -182,7 +198,9 @@ function buildAnswerKeyPrompt(questions, { sourceLabel, documentText } = {}) {
     .map((q) =>
       q.type === 'mc'
         ? `- ${q.order_index + 1}번: 객관식(보기 ${q.numChoices}개 중 정답 번호 1~${q.numChoices})`
-        : `- ${q.order_index + 1}번: 단답형(정답 텍스트)`,
+        : q.essay
+          ? `- ${q.order_index + 1}번: 서술형(모범답안 + 채점 핵심 내용)`
+          : `- ${q.order_index + 1}번: 단답형(정답 텍스트)`,
     )
     .join('\n');
 
@@ -193,12 +211,37 @@ ${list}
 
 ${sourceLabel}, 각 문항 번호에 대한 정답을 추출하세요.
 - 객관식 문항은 정답 보기의 번호만 숫자로 적으세요. ①②③④⑤처럼 동그라미 숫자로 표시돼 있어도 해당하는
-  아라비아 숫자(1~보기 개수)로 바꿔 적으세요.
+  아라비아 숫자(1~보기 개수)로 바꿔 적으세요. "모두 고르시오"처럼 정답 번호가 여러 개면 "2, 4"처럼
+  쉼표로 구분해 전부 적으세요.
 - 단답형 문항은 정답으로 적힌 텍스트를 그대로 옮겨 적으세요. 정답이 여러 개 인정되는 경우(예: "5 또는
   5개")는 쉼표로 구분해서 적으세요.
+- 서술형 문항은 answer에 모범답안(채점 기준) 문장을 옮기고, keyword_groups에 채점할 핵심 내용을 2~5개
+  뽑으세요. 학생 답에 핵심 내용이 들어 있는지를 글자 포함 여부로 판정하는 데 쓰입니다.
+  · 핵심 내용 하나당 keywords 배열 하나. 첫 번째는 모범답안에 나온 대표 표현, 이어서 초등학생이 같은
+    뜻으로 쓸 만한 표현(동의어, 쉬운 말, 기호 표기 등)을 최대 3개 더 적으세요.
+  · 표현은 조사·어미를 뺀 짧은 명사구나 핵심어로 적으세요(예: "이산화탄소를 흡수한다" → "이산화탄소").
+    띄어쓰기만 다른 표현은 따로 적지 마세요(채점할 때 띄어쓰기는 무시됩니다).
+  · 한 글자 표현은 다른 낱말에 섞여 잘못 인정되기 쉬우니 쓰지 마세요.
+  · 정답지에 채점 기준이나 "~가 들어가면 정답" 같은 안내가 있으면 그것을 우선하세요.
+  · 서술형이 아닌 문항의 keyword_groups는 빈 배열로 두세요.
 - 문항 번호는 반드시 위 목록의 번호와 일치시키세요. 실제로 읽을 수 있는 문항만 결과에 포함하고,
   흐릿하거나 확실하지 않은 문항은 억지로 추측해서 넣지 말고 빼세요.
 - 정답 이외의 해설이나 다른 정보는 옮기지 마세요.${documentText ? `\n\n판독 문서:\n${documentText}` : ''}`;
+}
+
+// 모델 응답을 {question_number, answer, keyword_groups: string[][]} 목록으로 정리한다. 서술형은
+// 모범답안 없이 키워드만 줄 수도 있어, 정답이나 키워드 중 하나라도 있으면 남긴다.
+function normalizeAnswerKey(result) {
+  return (result.answers ?? [])
+    .filter((a) => Number.isInteger(a?.question_number))
+    .map((a) => ({
+      question_number: a.question_number,
+      answer: typeof a.answer === 'string' ? a.answer.trim() : '',
+      keyword_groups: (Array.isArray(a.keyword_groups) ? a.keyword_groups : [])
+        .map((g) => (Array.isArray(g?.keywords) ? g.keywords.filter((k) => typeof k === 'string' && k.trim()) : []))
+        .filter((keywords) => keywords.length > 0),
+    }))
+    .filter((a) => a.answer || a.keyword_groups.length > 0);
 }
 
 export async function extractAnswerKeyFromImage({ imageBase64, mimeType, questions }) {
@@ -207,9 +250,7 @@ export async function extractAnswerKeyFromImage({ imageBase64, mimeType, questio
 
   const result = await callGemini({ imageBase64, mimeType, promptText, responseSchema });
 
-  return (result.answers ?? [])
-    .filter((a) => Number.isInteger(a?.question_number) && typeof a?.answer === 'string' && a.answer.trim())
-    .map((a) => ({ question_number: a.question_number, answer: a.answer.trim() }));
+  return normalizeAnswerKey(result);
 }
 
 export async function extractAnswerKeyFromDocumentText({ documentText, questions }) {
@@ -245,8 +286,17 @@ export async function extractAnswerKeyFromDocumentText({ documentText, questions
                   properties: {
                     question_number: { type: 'integer' },
                     answer: { type: 'string' },
+                    keyword_groups: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: { keywords: { type: 'array', items: { type: 'string' } } },
+                        required: ['keywords'],
+                      },
+                    },
                   },
-                  required: ['question_number', 'answer'],
+                  required: ['question_number', 'answer', 'keyword_groups'],
                 },
               },
             },
@@ -266,9 +316,7 @@ export async function extractAnswerKeyFromDocumentText({ documentText, questions
   if (!content) throw new Error('Solar Pro 3 응답에서 결과를 찾을 수 없습니다.');
   const result = JSON.parse(content);
 
-  return (result.answers ?? [])
-    .filter((a) => Number.isInteger(a?.question_number) && typeof a?.answer === 'string' && a.answer.trim())
-    .map((a) => ({ question_number: a.question_number, answer: a.answer.trim() }));
+  return normalizeAnswerKey(result);
 }
 
 export async function extractQuestionsFromImage({ imageBase64, mimeType, subjectId, gradeCluster, documentText = '' }) {

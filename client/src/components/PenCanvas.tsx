@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
-import { drawStroke, type Point, type PenTool, type Stroke } from '../lib/strokes';
+import { drawStroke, type Point, type PenTool, type Stroke, type StrokesPayload } from '../lib/strokes';
 
 export type { PenTool, Stroke, Point };
 
@@ -10,6 +10,9 @@ export interface PenCanvasHandle {
   // 필기 좌표는 이 캔버스의 CSS 픽셀 크기를 기준으로 저장돼 있다 - 나중에 다른 크기의
   // 화면에서 다시 그릴 때 원래 비율대로 맞추려면 이 크기를 같이 저장해둬야 한다.
   getCanvasSize: () => { width: number; height: number };
+  // 이전에 저장한 필기를 다시 불러온다(이미 푼 문항으로 돌아왔을 때). 저장 당시 캔버스 폭과
+  // 지금 폭이 다르면 문제 내용이 폭에 맞춰 다시 배치되므로 폭 비율로 같이 늘이고 줄인다.
+  load: (payload: StrokesPayload | null) => void;
 }
 
 interface PenCanvasProps {
@@ -75,6 +78,17 @@ export const PenCanvas = forwardRef<PenCanvasHandle, PenCanvasProps>(function Pe
     },
     getCanvasSize() {
       return sizeRef.current;
+    },
+    load(payload) {
+      const current = sizeRef.current.width;
+      const scale = payload && payload.width > 0 && current > 0 ? current / payload.width : 1;
+      strokesRef.current = (payload?.strokes ?? []).map((stroke) => ({
+        ...stroke,
+        points: stroke.points.map((pt) => ({ ...pt, x: pt.x * scale, y: pt.y * scale })),
+      }));
+      activeStrokeRef.current = null;
+      redrawAll();
+      onStrokesChange?.(strokesRef.current.length > 0);
     },
   }));
 

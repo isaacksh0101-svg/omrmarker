@@ -100,18 +100,18 @@ export function SessionDetailModal({
                   <p className="text-xs font-bold text-accent-ink">
                     지금 보고 있는 화면 · {detail.currentQuestion.index + 1} / {detail.currentQuestion.total}
                   </p>
-                  {detail.currentQuestion.prompt_image_path ? (
+                  {detail.currentQuestion.prompt &&
+                    (!detail.currentQuestion.prompt_image_path || detail.currentQuestion.show_prompt_text) && (
+                      <p className="mt-2 whitespace-pre-wrap text-sm font-bold text-ink">
+                        <MathText text={detail.currentQuestion.prompt} />
+                      </p>
+                    )}
+                  {detail.currentQuestion.prompt_image_path && (
                     <img
                       src={`/uploads/${detail.currentQuestion.prompt_image_path}`}
                       alt="문항 이미지"
                       className="mt-2 max-w-full rounded-lg border border-line"
                     />
-                  ) : (
-                    detail.currentQuestion.prompt && (
-                      <p className="mt-2 whitespace-pre-wrap text-sm font-bold text-ink">
-                        <MathText text={detail.currentQuestion.prompt} />
-                      </p>
-                    )
                   )}
                   {detail.currentQuestion.type === 'mc' && (
                     <div className="mt-2 flex flex-col gap-1.5">

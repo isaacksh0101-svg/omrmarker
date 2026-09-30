@@ -11,6 +11,9 @@ interface Props {
 interface AiExtractAnswersResponse {
   applied: number[];
   skipped: number[];
+  // 서술형: AI가 채점 키워드를 추천해 채운 문항 / 교사가 이미 입력해 둬서 그대로 둔 문항
+  keyword_suggested: number[];
+  keyword_kept: number[];
 }
 
 export function AiAnswerUploadPanel({ examId, onFilled }: Props) {
@@ -49,7 +52,8 @@ export function AiAnswerUploadPanel({ examId, onFilled }: Props) {
       <h2 className="text-sm font-bold text-ink">AI로 정답 채우기</h2>
       <p className="mt-1 text-xs text-ink-soft">
         정답지 사진(JPG/PNG) 또는 PDF를 올리면 AI가 문항 번호에 맞춰 정답을 자동으로 채웁니다. 채운
-        뒤에도 아래 표에서 확인하고 수정할 수 있습니다.
+        뒤에도 아래 표에서 확인하고 수정할 수 있습니다. "서술형"으로 표시한 문항은 모범답안에서 채점
+        키워드를 추천해 채웁니다(이미 입력한 키워드는 그대로 둡니다).
       </p>
       <div className="mt-3 flex items-center gap-2">
         <select
@@ -82,15 +86,28 @@ export function AiAnswerUploadPanel({ examId, onFilled }: Props) {
       {upstageExpired && <p className="mt-2 text-[11px] font-bold text-danger">Upstage 옵션 사용 기간이 종료되었습니다.</p>}
       {error && <p className="mt-2 text-xs font-bold text-danger">{error}</p>}
       {result && (
-        <p className="mt-2 text-xs font-bold text-ink">
-          {result.applied.length}개 문항의 정답을 채웠습니다.
-          {result.skipped.length > 0 && (
-            <span className="font-normal text-ink-soft">
-              {' '}
-              인식하지 못한 문항은 직접 입력해주세요: {result.skipped.join(', ')}번
-            </span>
+        <div className="mt-2 flex flex-col gap-1 text-xs">
+          <p className="font-bold text-ink">
+            {result.applied.length}개 문항의 정답을 채웠습니다.
+            {result.skipped.length > 0 && (
+              <span className="font-normal text-ink-soft">
+                {' '}
+                인식하지 못한 문항은 직접 입력해주세요: {result.skipped.join(', ')}번
+              </span>
+            )}
+          </p>
+          {result.keyword_suggested.length > 0 && (
+            <p className="font-bold text-warn">
+              서술형 {result.keyword_suggested.join(', ')}번에 AI가 채점 키워드를 추천했습니다. 아래 표에서 "핵심 내용"을
+              펼쳐 빠지거나 잘못된 표현이 없는지 꼭 확인해주세요.
+            </p>
           )}
-        </p>
+          {result.keyword_kept.length > 0 && (
+            <p className="text-ink-soft">
+              서술형 {result.keyword_kept.join(', ')}번은 이미 입력한 키워드가 있어 그대로 두었습니다.
+            </p>
+          )}
+        </div>
       )}
     </Card>
   );

@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import * as repo from '../db/repo.js';
 import { upload } from '../middleware/upload.js';
 import { getStandardByCode } from '../services/curriculumStandards.js';
+import { sanitizeKeywordRubric } from '../services/keywordGrading.js';
 import { requireAuth } from '../middleware/auth.js';
 
 export const examsRouter = Router();
@@ -218,9 +219,14 @@ examsRouter.put('/:id/questions/:qid', requireAuth, async (req, res) => {
 
   const prompt = req.body.prompt ?? question.prompt;
   const points = req.body.points ?? question.points;
-  const type = req.body.type ?? question.type;
+  // 유형 변경은 이미 답한 학생이 있는지 확인하는 /kind 경로에서만 한다.
+  const type = question.type;
+  const multiSelect =
+    typeof req.body.multi_select === 'boolean' ? req.body.multi_select : Boolean(question.multi_select);
+  const showPromptText =
+    typeof req.body.show_prompt_text === 'boolean' ? req.body.show_prompt_text : Boolean(question.show_prompt_text);
 
-  await repo.updateQuestion(examId, qid, { prompt, points, type });
+  await repo.updateQuestion(examId, qid, { prompt, points, type, multiSelect, showPromptText });
   const full = await repo.getExamFull(examId);
   res.json(full.questions.find((q) => q.id === qid));
 });
@@ -276,6 +282,26 @@ examsRouter.post('/:id/questions/:qid/prompt-image', requireAuth, upload.single(
   await repo.setPromptImage(qid, `questions/${filename}`);
   if (oldPath) {
     fs.rm(path.join(config.uploadsDir, oldPath), { force: true }, () => {});
+  } else if (question.prompt.trim()) {
+    // 텍스트로 쓰던 문항에 처음 붙인 이미지는 그림 자료로 본다 - 문제 설명이 사라지지 않게.
+    await repo.keepPromptTextWithImage(qid, question.prompt);
+  }
+
+  const full = await repo.getExamFull(examId);
+  res.json(full.questions.find((q) => q.id === qid));
+});
+
+// 문항 이미지를 떼어낸다. 이후엔 텍스트 문제 설명만 학생 화면에 보인다.
+examsRouter.delete('/:id/questions/:qid/prompt-image', requireAuth, async (req, res) => {
+  const examId = Number(req.params.id);
+  const qid = Number(req.params.qid);
+  const question = await getQuestionOr404(examId, qid, res);
+  if (!question) return;
+
+  const oldPath = question.prompt_image_path;
+  await repo.setPromptImage(qid, null);
+  if (oldPath) {
+    fs.rm(path.join(config.uploadsDir, oldPath), { force: true }, () => {});
   }
 
   const full = await repo.getExamFull(examId);
@@ -318,6 +344,50 @@ examsRouter.put('/:id/questions/:qid/answer', requireAuth, async (req, res) => {
   res.json(full.questions.find((q) => q.id === qid));
 });
 
+// ---- 문항 유형 바꾸기 ----
+
+examsRouter.put('/:id/questions/:qid/kind', requireAuth, async (req, res) => {
+  const examId = Number(req.params.id);
+  const qid = Number(req.params.qid);
+  const question = await getQuestionOr404(examId, qid, res);
+  if (!question) return;
+
+  const kind = req.body?.kind;
+  if (!['mc', 'short', 'essay'].includes(kind)) {
+    return res.status(400).json({ error: '문항 유형은 객관식, 단답형, 서술형 중 하나여야 합니다.' });
+  }
+  // 이미 학생이 답한 문항은 저장된 답(보기 선택/글 답안)과 채점 결과가 유형과 어긋나게 된다.
+  if ((await repo.countAnswersForQuestion(qid)) > 0) {
+    return res.status(409).json({ error: '이미 학생이 답한 문항은 유형을 바꿀 수 없습니다.' });
+  }
+
+  await repo.changeQuestionKind(qid, kind);
+  const full = await repo.getExamFull(examId);
+  res.json(full.questions.find((q) => q.id === qid));
+});
+
+// ---- 서술형(키워드 채점) 기준 ----
+
+examsRouter.put('/:id/questions/:qid/keyword-grading', requireAuth, async (req, res) => {
+  const examId = Number(req.params.id);
+  const qid = Number(req.params.qid);
+  const question = await getQuestionOr404(examId, qid, res);
+  if (!question) return;
+  if (question.type !== 'short') {
+    return res.status(400).json({ error: '단답형 문항만 서술형 채점을 쓸 수 있습니다.' });
+  }
+
+  const gradingMode = req.body?.grading_mode === 'keyword' ? 'keyword' : 'exact';
+  // 채점 방식만 바꿀 때는 기존 기준을 지우지 않는다(다시 켜면 그대로 돌아오도록).
+  const rubric = Array.isArray(req.body?.keyword_rubric)
+    ? sanitizeKeywordRubric(req.body.keyword_rubric)
+    : (await repo.getExamFull(examId)).questions.find((q) => q.id === qid).keyword_rubric;
+
+  await repo.setKeywordGrading(qid, gradingMode, rubric);
+  const full = await repo.getExamFull(examId);
+  res.json(full.questions.find((q) => q.id === qid));
+});
+
 // ---- 성취기준 태깅 ----
 
 examsRouter.put('/:id/questions/:qid/standards', requireAuth, async (req, res) => {
@@ -331,12 +401,17 @@ examsRouter.put('/:id/questions/:qid/standards', requireAuth, async (req, res) =
     return res.status(400).json({ error: 'codes 배열이 필요합니다.' });
   }
 
-  const unknown = codes.filter((code) => !getStandardByCode(code));
+  // 교육과정 데이터에서 빠진 성취기준으로 예전에 태그해 둔 문항은, 태그를 고칠 때 그 코드를
+  // 조용히 떼어낸다. 목록에 없는 코드를 새로 붙이려는 경우만 거부한다.
+  const existingCodes = (await repo.getExamFull(examId)).questions
+    .find((q) => q.id === qid)
+    .standards.map((s) => s.standard_code);
+  const unknown = codes.filter((code) => !getStandardByCode(code) && !existingCodes.includes(code));
   if (unknown.length > 0) {
     return res.status(400).json({ error: '알 수 없는 성취기준 코드입니다.', unknown });
   }
 
-  await repo.setStandards(qid, codes);
+  await repo.setStandards(qid, codes.filter((code) => getStandardByCode(code)));
   const full = await repo.getExamFull(examId);
   res.json(full.questions.find((q) => q.id === qid));
 });
@@ -363,6 +438,11 @@ examsRouter.post('/:id/finalize', requireAuth, async (req, res) => {
     if (q.type === 'mc') {
       if (!q.choices.some((c) => c.is_correct)) reasons.push('정답으로 표시된 보기가 없습니다.');
       if (q.choices.length < 2) reasons.push('보기가 2개 이상이어야 합니다.');
+      if (!q.multi_select && q.choices.filter((c) => c.is_correct).length > 1) {
+        reasons.push('정답이 여러 개입니다. "모두 고르기"를 켜거나 정답을 하나만 남겨주세요.');
+      }
+    } else if (q.type === 'short' && q.grading_mode === 'keyword') {
+      if (q.keyword_rubric.length === 0) reasons.push('서술형 채점 키워드가 설정되지 않았습니다.');
     } else if (q.type === 'short') {
       if (!q.correct_short_answers || q.correct_short_answers.length === 0) {
         reasons.push('정답이 설정되지 않았습니다.');

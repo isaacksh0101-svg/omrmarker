@@ -75,7 +75,8 @@ function computeChoiceDistribution(rows, choiceIds) {
   if (rows.length === 0 || choiceIds.length === 0) return [];
   const scoreMedian = distribution(rows.map((r) => r.restScorePct))?.median ?? null;
   return choiceIds.map((choiceId) => {
-    const selectedRows = rows.filter((r) => r.selectedChoiceId === choiceId);
+    // "모두 고르기" 문항은 한 학생이 여러 보기에 동시에 세어진다.
+    const selectedRows = rows.filter((r) => (r.selectedChoiceIds ?? []).includes(choiceId));
     const highScorerCount = scoreMedian == null
       ? 0
       : selectedRows.filter((r) => Number.isFinite(r.restScorePct) && r.restScorePct >= scoreMedian).length;

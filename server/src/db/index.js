@@ -79,10 +79,40 @@ if (!questionColumns.includes('source_image_path')) {
 if (!questionColumns.includes('ai_standard_candidates')) {
   db.exec('ALTER TABLE questions ADD COLUMN ai_standard_candidates TEXT');
 }
+if (!questionColumns.includes('multi_select')) {
+  db.exec('ALTER TABLE questions ADD COLUMN multi_select INTEGER NOT NULL DEFAULT 0');
+}
+if (!questionColumns.includes('show_prompt_text')) {
+  db.exec('ALTER TABLE questions ADD COLUMN show_prompt_text INTEGER NOT NULL DEFAULT 0');
+}
+if (!questionColumns.includes('grading_mode')) {
+  db.exec("ALTER TABLE questions ADD COLUMN grading_mode TEXT NOT NULL DEFAULT 'exact'");
+}
+if (!questionColumns.includes('keyword_rubric')) {
+  db.exec('ALTER TABLE questions ADD COLUMN keyword_rubric TEXT');
+}
 
 const answerColumns = db.prepare('PRAGMA table_info(answers)').all().map((c) => c.name);
 if (!answerColumns.includes('strokes_json')) {
   db.exec('ALTER TABLE answers ADD COLUMN strokes_json TEXT');
+}
+if (!answerColumns.includes('selected_choice_ids')) {
+  db.exec('ALTER TABLE answers ADD COLUMN selected_choice_ids TEXT');
+}
+if (!answerColumns.includes('graded_by_teacher')) {
+  db.exec('ALTER TABLE answers ADD COLUMN graded_by_teacher INTEGER NOT NULL DEFAULT 0');
+}
+if (!answerColumns.includes('visit_started_at')) {
+  db.exec('ALTER TABLE answers ADD COLUMN visit_started_at TEXT');
+}
+if (!answerColumns.includes('visit_count')) {
+  // 이전 방식은 문항마다 한 번씩만 봤으므로, 이미 보여준 문항은 1회 방문으로 채운다.
+  db.exec('ALTER TABLE answers ADD COLUMN visit_count INTEGER NOT NULL DEFAULT 0');
+  db.exec('UPDATE answers SET visit_count = 1');
+}
+if (!answerColumns.includes('first_is_correct')) {
+  db.exec('ALTER TABLE answers ADD COLUMN first_is_correct INTEGER');
+  db.exec('UPDATE answers SET first_is_correct = is_correct WHERE answered_at IS NOT NULL');
 }
 
 const reviewAssignmentColumns = db.prepare('PRAGMA table_info(review_assignments)').all().map((c) => c.name);
@@ -96,4 +126,7 @@ if (!reviewAssignmentColumns.includes('recovery_code_expires_at')) {
 const reviewAnswerColumns = db.prepare('PRAGMA table_info(review_answers)').all().map((c) => c.name);
 if (!reviewAnswerColumns.includes('attempts')) {
   db.exec('ALTER TABLE review_answers ADD COLUMN attempts INTEGER NOT NULL DEFAULT 1');
+}
+if (!reviewAnswerColumns.includes('selected_choice_ids')) {
+  db.exec('ALTER TABLE review_answers ADD COLUMN selected_choice_ids TEXT');
 }

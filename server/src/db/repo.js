@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { db } from './index.js';
 import { getStandardByCode } from '../services/curriculumStandards.js';
 import { computeStandardTrendPatterns } from '../services/assessmentInsights.js';
+import { parseKeywordRubric } from '../services/keywordGrading.js';
 
 function now() {
   return new Date().toISOString();
@@ -10,6 +11,31 @@ function now() {
 
 // 원문자(①②③...)는 폰트/환경에 따라 깨져 보이는 경우가 있어 그냥 숫자를 쓴다.
 const CHOICE_DIGITS = ['1', '2', '3', '4', '5', '6'];
+
+// 학생이 고른 보기 텍스트. 한 개만 고르는 문항은 selected_choice_id로 조인한 보기 텍스트를,
+// "모두 고르기" 문항은 selected_choice_ids(JSON 배열)의 보기 텍스트를 보기 순서대로 이어 붙인다.
+function selectedChoiceTextSql(answerAlias, choiceAlias) {
+  return `COALESCE(${choiceAlias}.text, (SELECT group_concat(t, ', ') FROM (
+    SELECT mc.text AS t FROM json_each(${answerAlias}.selected_choice_ids) j
+    JOIN choices mc ON mc.id = j.value ORDER BY mc.order_index)))`;
+}
+
+// 두 저장 방식(단일 id / JSON 배열)을 화면에서 한 가지로 다루도록 항상 id 배열로 돌려준다.
+export function parseSelectedChoiceIds(selectedChoiceId, selectedChoiceIdsJson) {
+  if (selectedChoiceIdsJson) {
+    try {
+      const ids = JSON.parse(selectedChoiceIdsJson);
+      if (Array.isArray(ids)) return ids.filter(Number.isInteger);
+    } catch {
+      // 손상된 값은 아래로 내려가 선택 없음으로 처리한다.
+    }
+  }
+  return selectedChoiceId != null ? [selectedChoiceId] : [];
+}
+
+function withSelectedChoiceIds({ selected_choice_ids, ...row }) {
+  return { ...row, selected_choice_ids: parseSelectedChoiceIds(row.selected_choice_id, selected_choice_ids) };
+}
 
 // ---- exams ----
 
@@ -33,6 +59,9 @@ export async function getExamFull(id) {
       return {
         ...q,
         ai_suggested: !!q.ai_suggested,
+        multi_select: !!q.multi_select,
+        show_prompt_text: !!q.show_prompt_text,
+        keyword_rubric: parseKeywordRubric(q.keyword_rubric),
         correct_short_answers: q.correct_short_answers ? JSON.parse(q.correct_short_answers) : null,
         ai_standard_candidates: q.ai_standard_candidates ? JSON.parse(q.ai_standard_candidates) : null,
         choices,
@@ -216,14 +245,49 @@ export async function getQuestion(examId, questionId) {
   return db.prepare('SELECT * FROM questions WHERE id = ? AND exam_id = ?').get(questionId, examId);
 }
 
-export async function updateQuestion(examId, qid, { prompt, points, type }) {
-  await db.prepare('UPDATE questions SET prompt = ?, points = ?, type = ?, updated_at = ? WHERE id = ?').run(
-    prompt,
-    points,
+export async function updateQuestion(examId, qid, { prompt, points, type, multiSelect, showPromptText }) {
+  await db
+    .prepare(
+      'UPDATE questions SET prompt = ?, points = ?, type = ?, multi_select = ?, show_prompt_text = ?, updated_at = ? WHERE id = ?',
+    )
+    .run(prompt, points, type, multiSelect ? 1 : 0, showPromptText ? 1 : 0, now(), qid);
+}
+
+export async function countAnswersForQuestion(qid) {
+  return db
+    .prepare('SELECT COUNT(*) AS count FROM answers WHERE question_id = ? AND answered_at IS NOT NULL')
+    .get(qid).count;
+}
+
+// 문항 유형 바꾸기: 객관식 / 단답형 / 서술형(단답형 + 키워드 채점). 다른 유형의 설정(보기, 인정
+// 답안, 채점 키워드)은 지우지 않고 남겨둬서 되돌리면 그대로 돌아오게 한다. 보기가 하나도 없는
+// 문항을 객관식으로 바꿀 때만 번호 보기 5개를 만든다.
+export async function changeQuestionKind(qid, kind) {
+  const type = kind === 'mc' ? 'mc' : 'short';
+  const gradingMode = kind === 'essay' ? 'keyword' : 'exact';
+  db.prepare('UPDATE questions SET type = ?, grading_mode = ?, updated_at = ? WHERE id = ?').run(
     type,
+    gradingMode,
     now(),
     qid,
   );
+  if (type === 'mc') {
+    const { count } = db.prepare('SELECT COUNT(*) AS count FROM choices WHERE question_id = ?').get(qid);
+    if (count === 0) {
+      const insert = db.prepare('INSERT INTO choices (question_id, order_index, text, is_correct) VALUES (?, ?, ?, 0)');
+      for (const [i, label] of CHOICE_DIGITS.slice(0, 5).entries()) insert.run(qid, i, label);
+    }
+  }
+}
+
+export async function setMultiSelect(qid, multiSelect) {
+  await db.prepare('UPDATE questions SET multi_select = ?, updated_at = ? WHERE id = ?').run(multiSelect ? 1 : 0, now(), qid);
+}
+
+export async function setKeywordGrading(qid, gradingMode, rubric) {
+  await db
+    .prepare('UPDATE questions SET grading_mode = ?, keyword_rubric = ?, updated_at = ? WHERE id = ?')
+    .run(gradingMode, rubric.length > 0 ? JSON.stringify(rubric) : null, now(), qid);
 }
 
 export async function setPromptImage(qid, promptImagePath) {
@@ -232,6 +296,14 @@ export async function setPromptImage(qid, promptImagePath) {
     now(),
     qid,
   );
+}
+
+// 텍스트로 만든 문항에 처음 이미지를 붙일 때 - 이미 쓴 문제 설명이 학생 화면에서 사라지지 않게
+// 텍스트도 함께 보여주도록 켜고, AI가 남긴 "(그림 있음 - 원본 확인 필요)" 표시는 이제 필요 없으니 뗀다.
+export async function keepPromptTextWithImage(qid, prompt) {
+  await db
+    .prepare('UPDATE questions SET show_prompt_text = 1, prompt = ?, updated_at = ? WHERE id = ?')
+    .run(prompt.replace(/\s*\(그림 있음[^)]*\)/g, '').trim(), now(), qid);
 }
 
 export async function deleteQuestion(examId, qid) {
@@ -599,15 +671,28 @@ export async function startReviewAssignment(assignmentId) {
     .run(now(), assignmentId);
 }
 
-export async function saveReviewAnswer(assignmentId, questionId, { selectedChoiceId, shortAnswerText, isCorrect }) {
+export async function saveReviewAnswer(
+  assignmentId,
+  questionId,
+  { selectedChoiceId, selectedChoiceIds, shortAnswerText, isCorrect },
+) {
   db.prepare(`INSERT INTO review_answers
-    (assignment_id, question_id, selected_choice_id, short_answer_text, is_correct, answered_at, attempts)
-    VALUES (?, ?, ?, ?, ?, ?, 1)
+    (assignment_id, question_id, selected_choice_id, selected_choice_ids, short_answer_text, is_correct, answered_at, attempts)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1)
     ON CONFLICT(assignment_id, question_id) DO UPDATE SET
-      selected_choice_id = excluded.selected_choice_id, short_answer_text = excluded.short_answer_text,
+      selected_choice_id = excluded.selected_choice_id, selected_choice_ids = excluded.selected_choice_ids,
+      short_answer_text = excluded.short_answer_text,
       is_correct = excluded.is_correct, answered_at = excluded.answered_at,
       attempts = review_answers.attempts + 1`)
-    .run(assignmentId, questionId, selectedChoiceId ?? null, shortAnswerText ?? null, isCorrect ? 1 : 0, now());
+    .run(
+      assignmentId,
+      questionId,
+      selectedChoiceId ?? null,
+      selectedChoiceIds ? JSON.stringify(selectedChoiceIds) : null,
+      shortAnswerText ?? null,
+      isCorrect ? 1 : 0,
+      now(),
+    );
   // 오답이면 그 문항은 다음으로 안 넘어가고 맞을 때까지 다시 시도하게 하므로(학생 화면에서
   // 강제), "완료"는 답을 낸 개수가 아니라 "정답을 맞힌" 개수로 판단한다 - 같은 문항을 계속
   // 다시 제출해도 UPSERT라 행은 하나뿐이고, 그 행의 is_correct가 최종적으로 맞았는지만 본다.
@@ -638,7 +723,8 @@ export async function getReviewAssignmentDetail(assignmentId) {
       review.selected_choice_id AS review_choice_id, review.short_answer_text AS review_short_answer,
       review.is_correct AS review_is_correct, review.answered_at AS review_answered_at,
       review.attempts AS review_attempts,
-      original_choice.text AS original_choice_text, review_choice.text AS review_choice_text
+      ${selectedChoiceTextSql('original', 'original_choice')} AS original_choice_text,
+      ${selectedChoiceTextSql('review', 'review_choice')} AS review_choice_text
     FROM review_assignment_questions assigned
     JOIN questions q ON q.id = assigned.question_id
     JOIN review_assignments assignment ON assignment.id = assigned.assignment_id
@@ -708,35 +794,203 @@ export async function getAnswer(sessionId, questionId) {
   return db.prepare('SELECT * FROM answers WHERE session_id = ? AND question_id = ?').get(sessionId, questionId);
 }
 
-export async function createAnswerShown(sessionId, questionId, shownAt) {
-  await db
-    .prepare('INSERT INTO answers (session_id, question_id, shown_at) VALUES (?, ?, ?)')
-    .run(sessionId, questionId, shownAt);
+// ---- 문항 방문(머문 시간) ----
+// 학생은 문항을 앞뒤로 오갈 수 있다. 문항 화면에 들어오면 방문을 열고(visit_started_at),
+// 떠나면 머문 시간을 time_spent_ms에 더하고 닫는다. 새로고침으로 같은 문항을 다시 불러와도
+// 이미 열린 방문은 그대로 둬서 두 번 세지 않는다.
+
+export async function openQuestionVisit(sessionId, questionId, at) {
+  db.prepare('INSERT OR IGNORE INTO answers (session_id, question_id, shown_at) VALUES (?, ?, ?)').run(
+    sessionId,
+    questionId,
+    at,
+  );
+  db.prepare(
+    `UPDATE answers SET visit_started_at = ?, visit_count = visit_count + 1
+     WHERE session_id = ? AND question_id = ? AND visit_started_at IS NULL`,
+  ).run(at, sessionId, questionId);
 }
 
+const ADD_OPEN_VISIT_SQL = `time_spent_ms = COALESCE(time_spent_ms, 0)
+  + MAX(0, CAST(ROUND((julianday(?) - julianday(visit_started_at)) * 86400000) AS INTEGER)),
+  visit_started_at = NULL`;
+
+export async function closeQuestionVisit(sessionId, questionId, at) {
+  db.prepare(
+    `UPDATE answers SET ${ADD_OPEN_VISIT_SQL}
+     WHERE session_id = ? AND question_id = ? AND visit_started_at IS NOT NULL`,
+  ).run(at, sessionId, questionId);
+}
+
+function closeAllQuestionVisits(sessionId, at) {
+  db.prepare(`UPDATE answers SET ${ADD_OPEN_VISIT_SQL} WHERE session_id = ? AND visit_started_at IS NOT NULL`).run(
+    at,
+    sessionId,
+  );
+}
+
+// 답 없이 다른 문항으로 넘어갈 때도 그 문항에 쓴 필기는 남겨둔다(돌아와서 이어 쓰도록).
+export async function saveQuestionStrokes(sessionId, questionId, strokesJson) {
+  db.prepare('UPDATE answers SET strokes_json = ? WHERE session_id = ? AND question_id = ?').run(
+    strokesJson,
+    sessionId,
+    questionId,
+  );
+}
+
+// 답을 저장(또는 고쳐서 다시 저장)한다. 머문 시간은 방문 기록으로 따로 쌓이고, 처음 낸 답의
+// 정오는 first_is_correct에 한 번만 남는다.
 export async function submitAnswer(
   sessionId,
   questionId,
-  { selectedChoiceId, shortAnswerText, answeredAt, timeSpentMs, isCorrect, awardedPoints, strokesJson },
+  { selectedChoiceId, selectedChoiceIds, shortAnswerText, answeredAt, isCorrect, awardedPoints, strokesJson },
 ) {
   await db
     .prepare(
       `UPDATE answers
-       SET selected_choice_id = ?, short_answer_text = ?, answered_at = ?, time_spent_ms = ?,
-           is_correct = ?, awarded_points = ?, strokes_json = ?
+       SET selected_choice_id = ?, selected_choice_ids = ?, short_answer_text = ?, answered_at = ?,
+           is_correct = ?, awarded_points = ?, strokes_json = ?, first_is_correct = COALESCE(first_is_correct, ?)
        WHERE session_id = ? AND question_id = ?`,
     )
     .run(
       selectedChoiceId,
+      selectedChoiceIds ? JSON.stringify(selectedChoiceIds) : null,
       shortAnswerText,
       answeredAt,
-      timeSpentMs,
       isCorrect,
       awardedPoints,
       strokesJson ?? null,
+      isCorrect,
       sessionId,
       questionId,
     );
+}
+
+// 학생이 "최종 제출"할 때 답하지 않은 문항(한 번도 안 연 문항 포함)을 무응답 오답으로
+// 마감한다 - 예전의 "포기"와 같다. 오답 재풀이 대상에도 들어간다. 시간 초과·강제 종료는
+// 학생이 마감을 고른 게 아니므로 여기를 거치지 않는다(이전과 같이 미응답으로 남는다).
+export async function markUnansweredAsBlank(sessionId, examId, at) {
+  db.prepare(
+    `INSERT OR IGNORE INTO answers (session_id, question_id, shown_at)
+     SELECT ?, id, ? FROM questions WHERE exam_id = ?`,
+  ).run(sessionId, at, examId);
+  db.prepare(
+    `UPDATE answers
+     SET answered_at = ?, short_answer_text = COALESCE(short_answer_text, ''), is_correct = 0, awarded_points = 0,
+         first_is_correct = COALESCE(first_is_correct, 0)
+     WHERE session_id = ? AND answered_at IS NULL`,
+  ).run(at, sessionId);
+}
+
+export async function countAnsweredQuestions(sessionId) {
+  return db.prepare('SELECT COUNT(*) AS n FROM answers WHERE session_id = ? AND answered_at IS NOT NULL').get(sessionId)
+    .n;
+}
+
+export async function getAnsweredQuestionIds(sessionId) {
+  return db
+    .prepare('SELECT question_id FROM answers WHERE session_id = ? AND answered_at IS NOT NULL')
+    .all(sessionId)
+    .map((row) => row.question_id);
+}
+
+// 교사가 결과 화면에서 한 문항의 점수를 직접 고친다. 만점이면 정답으로 보고, 이미 끝난
+// 응시의 총점도 답안 점수 합계로 다시 맞춘다(finalizeSession과 같은 계산).
+export async function setAnswerGradeByTeacher(sessionId, questionId, awardedPoints, isCorrect) {
+  db.prepare(
+    `UPDATE answers SET awarded_points = ?, is_correct = ?, graded_by_teacher = 1
+     WHERE session_id = ? AND question_id = ?`,
+  ).run(awardedPoints, isCorrect ? 1 : 0, sessionId, questionId);
+  recomputeSessionScore(sessionId);
+  syncReviewAssignmentQuestion(sessionId, questionId, isCorrect);
+}
+
+// 이미 끝난 응시의 총점을 답안 점수 합계로 다시 맞춘다(finalizeSession과 같은 계산).
+// 아직 응시 중이면 score가 NULL이라 건드리지 않는다 - 제출할 때 계산된다.
+function recomputeSessionScore(sessionId) {
+  db.prepare(
+    `UPDATE exam_sessions
+     SET score = (SELECT COALESCE(SUM(awarded_points), 0) FROM answers WHERE session_id = ?)
+     WHERE id = ? AND score IS NOT NULL`,
+  ).run(sessionId, sessionId);
+}
+
+// 제출 뒤에 채점이 바뀐 문항(교사 점수 수정, 이의 제기로 키워드 추가 후 재채점)을 오답 재풀이
+// 목록에 맞춘다. 정답이 됐으면 목록과 그 문항의 재풀이 기록에서 빼고, 남은 문항이 없으면 배정
+// 자체를 없앤다. 오답이 됐으면 목록에 넣고, 이미 끝낸 재풀이는 다시 "진행 중"으로 돌린다.
+// 아직 응시 중인 세션은 제출할 때 재풀이가 만들어지므로 건드리지 않는다.
+function syncReviewAssignmentQuestion(sessionId, questionId, isCorrect) {
+  const session = db.prepare('SELECT status FROM exam_sessions WHERE id = ?').get(sessionId);
+  if (!session || (session.status !== 'submitted' && session.status !== 'force_submitted')) return;
+  let assignment = db.prepare('SELECT * FROM review_assignments WHERE session_id = ?').get(sessionId);
+
+  if (isCorrect) {
+    if (!assignment) return;
+    db.prepare('DELETE FROM review_assignment_questions WHERE assignment_id = ? AND question_id = ?').run(
+      assignment.id,
+      questionId,
+    );
+    db.prepare('DELETE FROM review_answers WHERE assignment_id = ? AND question_id = ?').run(assignment.id, questionId);
+  } else {
+    if (!assignment) {
+      const id = db.prepare('INSERT INTO review_assignments (session_id, created_at) VALUES (?, ?)').run(sessionId, now())
+        .lastInsertRowid;
+      assignment = db.prepare('SELECT * FROM review_assignments WHERE id = ?').get(id);
+    }
+    db.prepare(
+      `INSERT OR IGNORE INTO review_assignment_questions (assignment_id, question_id, order_index)
+       SELECT ?, id, order_index FROM questions WHERE id = ?`,
+    ).run(assignment.id, questionId);
+  }
+
+  const total = db
+    .prepare('SELECT COUNT(*) AS count FROM review_assignment_questions WHERE assignment_id = ?')
+    .get(assignment.id).count;
+  if (total === 0) {
+    db.prepare('DELETE FROM review_assignments WHERE id = ?').run(assignment.id);
+    return;
+  }
+  const correct = db
+    .prepare('SELECT COUNT(*) AS count FROM review_answers WHERE assignment_id = ? AND is_correct = 1')
+    .get(assignment.id).count;
+  if (correct >= total) {
+    db.prepare("UPDATE review_assignments SET status = 'completed', current_index = ?, completed_at = COALESCE(completed_at, ?) WHERE id = ?")
+      .run(total, now(), assignment.id);
+  } else {
+    // 한 번이라도 풀기 시작했거나 끝냈던 재풀이면 "진행 중", 아직 손대지 않았으면 "미시작".
+    const status = assignment.started_at || assignment.status !== 'assigned' ? 'in_progress' : 'assigned';
+    db.prepare('UPDATE review_assignments SET status = ?, current_index = ?, completed_at = NULL WHERE id = ?').run(
+      status,
+      correct,
+      assignment.id,
+    );
+  }
+}
+
+// 서술형 채점 기준이 바뀐 뒤(이의 제기로 표현을 인정) 이 문항의 답안을 다시 채점하기 위한 목록.
+// 교사가 직접 점수를 고친 답안은 교사 판단을 존중해 대상에서 뺀다.
+export async function listAutoGradedAnswers(questionId) {
+  return db
+    .prepare(
+      `SELECT a.session_id, a.short_answer_text, a.awarded_points, a.is_correct, es.roll_number, r.name
+       FROM answers a
+       JOIN exam_sessions es ON es.id = a.session_id
+       LEFT JOIN roster r ON r.roll_number = es.roll_number
+       WHERE a.question_id = ? AND a.answered_at IS NOT NULL AND a.graded_by_teacher = 0
+       ORDER BY es.roll_number`,
+    )
+    .all(questionId);
+}
+
+export async function applyAutoRegrade(sessionId, questionId, awardedPoints, isCorrect) {
+  db.prepare('UPDATE answers SET awarded_points = ?, is_correct = ? WHERE session_id = ? AND question_id = ?').run(
+    awardedPoints,
+    isCorrect ? 1 : 0,
+    sessionId,
+    questionId,
+  );
+  recomputeSessionScore(sessionId);
+  syncReviewAssignmentQuestion(sessionId, questionId, isCorrect);
 }
 
 export async function advanceSession(sessionId, nextIndex) {
@@ -750,43 +1004,6 @@ export async function addExtraTime(sessionId, seconds) {
     .prepare('UPDATE exam_sessions SET extra_time_sec = MAX(0, extra_time_sec + ?) WHERE id = ?')
     .run(seconds, sessionId);
   return getSession(sessionId);
-}
-
-// "건너뛰기": 보여줬지만(shown) 아직 답하지 않은(answered_at IS NULL) 문항 - 1차 진행을
-// 다 돌고 나면 이것들을 모아 학생에게 다시 보여준다.
-export async function countPendingAnswers(sessionId) {
-  const row = await db
-    .prepare('SELECT COUNT(*) AS n FROM answers WHERE session_id = ? AND answered_at IS NULL')
-    .get(sessionId);
-  return row.n;
-}
-
-export async function getPendingQuestionIds(sessionId) {
-  const rows = await db
-    .prepare(
-      `SELECT q.id FROM answers a
-       JOIN questions q ON q.id = a.question_id
-       WHERE a.session_id = ? AND a.answered_at IS NULL
-       ORDER BY q.order_index`,
-    )
-    .all(sessionId);
-  return rows.map((r) => r.id);
-}
-
-// 건너뛴 문항을 "포기"로 마감 - 빈 답으로 채점(오답 처리)해 더 이상 미응답 상태로 남지 않게 한다.
-export async function giveUpAnswer(sessionId, questionId, answeredAt) {
-  const answerRow = await getAnswer(sessionId, questionId);
-  if (!answerRow || answerRow.answered_at) return false;
-  const timeSpentMs = Date.now() - new Date(answerRow.shown_at).getTime();
-  await submitAnswer(sessionId, questionId, {
-    selectedChoiceId: null,
-    shortAnswerText: '',
-    answeredAt,
-    timeSpentMs,
-    isCorrect: 0,
-    awardedPoints: 0,
-  });
-  return true;
 }
 
 // 화면 이탈/포커스 아웃이 감지되면 그 즉시 시험을 강제 제출 처리한다("경고 3회" 같은
@@ -818,6 +1035,9 @@ export async function recordScreenLeave(sessionId, type, debounceMs) {
 export async function finalizeSession(sessionId, status = 'submitted', reason = null) {
   const session = await getSession(sessionId);
   if (!session || session.status === 'submitted' || session.status === 'force_submitted') return;
+
+  // 어떤 이유로 끝나든(제출·시간 초과·강제 종료) 보고 있던 문항에 머문 시간까지 마감한다.
+  closeAllQuestionVisits(sessionId, now());
 
   const totals = await db
     .prepare(
@@ -869,7 +1089,8 @@ export async function getMonitorStudents(examId) {
     .prepare(
       `SELECT r.roll_number, r.name, es.id AS session_id, es.status,
               es.current_question_index, es.warning_count, es.started_at, es.submitted_at,
-              es.score, es.max_score, es.extra_time_sec, es.disqualify_reason
+              es.score, es.max_score, es.extra_time_sec, es.disqualify_reason,
+              (SELECT COUNT(*) FROM answers a WHERE a.session_id = es.id AND a.answered_at IS NOT NULL) AS answered_count
        FROM roster r
        LEFT JOIN exam_sessions es ON es.roll_number = r.roll_number AND es.exam_id = ?
        ORDER BY r.roll_number`,
@@ -881,7 +1102,9 @@ export async function getMonitorStudents(examId) {
 export async function getSessionAnswerHistory(sessionId) {
   const rows = await db
     .prepare(
-      `SELECT q.order_index, q.type, q.prompt, a.selected_choice_id, c.text AS selected_choice_text,
+      `SELECT q.id AS question_id, q.order_index, q.type, q.prompt, q.points, q.multi_select,
+              a.graded_by_teacher, a.visit_count, a.first_is_correct, a.selected_choice_id, a.selected_choice_ids,
+              ${selectedChoiceTextSql('a', 'c')} AS selected_choice_text,
               a.short_answer_text, a.is_correct, a.awarded_points, a.time_spent_ms, a.answered_at, a.strokes_json
        FROM answers a
        JOIN questions q ON q.id = a.question_id
@@ -890,8 +1113,10 @@ export async function getSessionAnswerHistory(sessionId) {
        ORDER BY q.order_index`,
     )
     .all(sessionId);
-  return rows.map(({ strokes_json, ...rest }) => ({
-    ...rest,
+  return rows.map(({ strokes_json, multi_select, graded_by_teacher, ...rest }) => ({
+    ...withSelectedChoiceIds(rest),
+    multi_select: !!multi_select,
+    graded_by_teacher: !!graded_by_teacher,
     strokes: strokes_json ? JSON.parse(strokes_json) : null,
   }));
 }
@@ -937,7 +1162,7 @@ export async function getResultsForExam(examId) {
   // 문항마다 따로 질의하지 않고 시험 전체를 한 번에 불러와 question_id로 묶는다.
   const analyticsRows = await db
     .prepare(
-      `SELECT a.question_id, a.selected_choice_id, a.is_correct, a.awarded_points,
+      `SELECT a.question_id, a.selected_choice_id, a.selected_choice_ids, a.is_correct, a.awarded_points,
               a.time_spent_ms, es.score, es.max_score, q.points
        FROM answers a
        JOIN exam_sessions es ON es.id = a.session_id
@@ -954,7 +1179,7 @@ export async function getResultsForExam(examId) {
       scorePct: row.score / row.max_score,
       restScorePct:
         remainingMaxScore > 0 ? (row.score - (row.awarded_points ?? 0)) / remainingMaxScore : null,
-      selectedChoiceId: row.selected_choice_id,
+      selectedChoiceIds: parseSelectedChoiceIds(row.selected_choice_id, row.selected_choice_ids),
       timeSpentMs: row.time_spent_ms,
     });
   }
@@ -989,10 +1214,12 @@ export async function getResultsForExam(examId) {
 
 // 문항별 정답률에서 특정 문항 번호를 눌렀을 때 보여주는 "학생별 소요시간" 상세.
 export async function getQuestionStudentBreakdown(questionId) {
-  return db
+  const rows = db
     .prepare(
-      `SELECT es.id AS session_id, es.roll_number, r.name, a.is_correct, a.time_spent_ms,
-              a.selected_choice_id, c.text AS selected_choice_text, a.short_answer_text
+      `SELECT es.id AS session_id, es.roll_number, r.name, a.is_correct, a.awarded_points, a.graded_by_teacher,
+              a.time_spent_ms,
+              a.selected_choice_id, a.selected_choice_ids, ${selectedChoiceTextSql('a', 'c')} AS selected_choice_text,
+              a.short_answer_text
        FROM answers a
        JOIN exam_sessions es ON es.id = a.session_id
        LEFT JOIN roster r ON r.roll_number = es.roll_number
@@ -1001,16 +1228,18 @@ export async function getQuestionStudentBreakdown(questionId) {
        ORDER BY a.time_spent_ms IS NULL, a.time_spent_ms DESC`,
     )
     .all(questionId);
+  return rows.map((row) => ({ ...withSelectedChoiceIds(row), graded_by_teacher: !!row.graded_by_teacher }));
 }
 
 // 위와 같은 모양의 행을, 문항 하나가 아니라 시험 전체 문항에 대해 한 번에 가져온다.
 // SessionReview에서 학생 한 명의 세션 전체에 시간 기반 이상치 배지를 붙일 때, 문항마다
 // 따로 질의하지 않고 이 한 번의 쿼리 결과를 question_id로 묶어서 쓴다.
 export async function getExamQuestionStudentBreakdown(examId) {
-  return db
+  const rows = db
     .prepare(
       `SELECT a.question_id, q.order_index, es.roll_number, r.name, a.is_correct, a.time_spent_ms,
-              a.selected_choice_id, c.text AS selected_choice_text, a.short_answer_text
+              a.selected_choice_id, a.selected_choice_ids, ${selectedChoiceTextSql('a', 'c')} AS selected_choice_text,
+              a.short_answer_text
        FROM answers a
        JOIN exam_sessions es ON es.id = a.session_id
        JOIN questions q ON q.id = a.question_id
@@ -1020,6 +1249,7 @@ export async function getExamQuestionStudentBreakdown(examId) {
        ORDER BY a.question_id, a.time_spent_ms IS NULL, a.time_spent_ms DESC`,
     )
     .all(examId);
+  return rows.map(withSelectedChoiceIds);
 }
 
 export async function computeStandardsAccuracy({ examId, rollNumber, from, to } = {}) {

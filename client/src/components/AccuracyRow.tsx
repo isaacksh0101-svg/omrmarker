@@ -6,6 +6,8 @@ interface InsightBadge {
 interface Props {
   label: string;
   sublabel?: string;
+  // 성취기준 문장처럼 끝까지 읽어야 뜻이 통하는 설명은 잘라내지 않고 줄바꿈해서 다 보여준다.
+  wrapSublabel?: boolean;
   extra?: string;
   metric?: string;
   metricLabel?: string;
@@ -20,6 +22,7 @@ interface Props {
 export function AccuracyRow({
   label,
   sublabel,
+  wrapSublabel = false,
   extra,
   metric,
   metricLabel = '평균 시간',
@@ -43,7 +46,9 @@ export function AccuracyRow({
         <p className="truncate text-sm font-bold text-ink">{label}</p>
         {sublabel && (
           <p className="mt-0.5 flex items-baseline gap-1 text-xs text-ink-soft">
-            <span className="truncate">{sublabel}</span>
+            <span className={wrapSublabel ? 'break-keep' : 'truncate'} title={wrapSublabel ? undefined : sublabel}>
+              {sublabel}
+            </span>
             {extra && <span className="shrink-0">· {extra}</span>}
           </p>
         )}

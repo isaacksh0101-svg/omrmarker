@@ -508,7 +508,7 @@ export function StandardsReport() {
                   <div key={item.code} className="grid grid-cols-1 gap-3 py-3 sm:grid-cols-[1fr_9rem_9rem]">
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-ink">[{item.code}]</p>
-                      <p className="mt-0.5 truncate text-xs text-ink-soft">{item.statement}</p>
+                      <p className="mt-0.5 break-keep text-xs text-ink-soft">{item.statement}</p>
                       {item.myAttempted === 0 && (
                         <p className="mt-0.5 text-[11px] font-bold text-warn">아직 풀어본 문제가 없어요</p>
                       )}
@@ -563,6 +563,7 @@ export function StandardsReport() {
                   key={s.code}
                   label={`[${s.code}]`}
                   sublabel={s.statement}
+                  wrapSublabel
                   extra={`평균 ${formatMs(s.avg_time_spent_ms)}`}
                   correct={s.correct_count}
                   total={s.attempted_count}

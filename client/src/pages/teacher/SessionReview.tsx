@@ -8,6 +8,7 @@ import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
 import { MathText } from '../../components/MathText';
 import { StrokesReplay } from '../../components/StrokesReplay';
+import { ShortAnswerGrading } from '../../components/ShortAnswerGrading';
 import { statusMeta } from '../../lib/sessionStatus';
 
 function formatMs(ms: number | null) {
@@ -52,6 +53,12 @@ export function SessionReview() {
     api.get<SessionQuestionOutlier[]>(`/exams/${examId}/sessions/${sid}/question-insights`).then(setQuestionOutliers);
   }, [examId, sid]);
 
+  // 교사가 단답형·서술형 점수를 고친 뒤 총점과 문항 표시를 새로 불러온다.
+  function reloadAfterGrade() {
+    api.get<SessionMonitorDetail>(`/exams/${examId}/sessions/${sid}/monitor`).then(setDetail);
+    api.get<ExamResultsData>(`/exams/${examId}/results`).then(setResultsData);
+  }
+
   // 이전/다음 학생 이동을 위해 이 시험의 전체 세션 목록(번호 순)을 한 번 불러온다.
   useEffect(() => {
     api.get<ExamResultsData>(`/exams/${examId}/results`).then(setResultsData);
@@ -66,6 +73,7 @@ export function SessionReview() {
   if (!detail) return <div className="p-10 text-sm text-ink-soft">불러오는 중...</div>;
 
   const meta = statusMeta(detail.session.status, detail.session.disqualify_reason);
+  const finished = detail.session.status === 'submitted' || detail.session.status === 'force_submitted';
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
@@ -133,6 +141,14 @@ export function SessionReview() {
             // 부족했을 가능성이 높은 경우라, "혼낼 게 아니라 도와줘야 할" 신호로 구분한다.
             const triedHardButWrong = h.is_correct === 0 && points >= MEANINGFUL_STROKE_POINTS;
             const timeOutlier = questionOutliers.find((o) => o.order_index === h.order_index);
+            // 처음 낸 답과 최종 답의 정오가 다르면 답을 고친 것이다(교사가 점수를 고친 경우는 제외).
+            const changedAnswer =
+              !h.graded_by_teacher && h.first_is_correct != null && h.first_is_correct !== h.is_correct
+                ? h.first_is_correct
+                  ? '맞은 답을 고쳐서 틀림'
+                  : '틀린 답을 고쳐서 맞힘'
+                : null;
+            const revisited = h.visit_count >= 2;
             const classStat = resultsData?.questionStats.find((q) => q.order_index === h.order_index);
             const timeOutlierTitle =
               timeOutlier && classStat
@@ -147,27 +163,30 @@ export function SessionReview() {
                 <div className="flex items-start gap-3">
                   <span
                     className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                      h.is_correct ? 'bg-good/15 text-good' : 'bg-danger/15 text-danger'
+                      h.is_correct
+                        ? 'bg-good/15 text-good'
+                        : (h.awarded_points ?? 0) > 0
+                          ? 'bg-warn/15 text-warn'
+                          : 'bg-danger/15 text-danger'
                     }`}
                   >
                     {h.order_index + 1}
                   </span>
                   <div className="min-w-0 flex-1">
-                    {h.prompt_image_path ? (
+                    {h.prompt && (!h.prompt_image_path || h.show_prompt_text) && (
+                      <p className="whitespace-pre-wrap text-sm font-bold text-ink">
+                        <MathText text={h.prompt} />
+                      </p>
+                    )}
+                    {h.prompt_image_path && (
                       <img
                         src={`/uploads/${h.prompt_image_path}`}
                         alt="문항 이미지"
-                        className="max-w-full rounded-lg border border-line"
+                        className={`max-w-full rounded-lg border border-line ${h.show_prompt_text && h.prompt ? 'mt-2' : ''}`}
                       />
-                    ) : (
-                      h.prompt && (
-                        <p className="whitespace-pre-wrap text-sm font-bold text-ink">
-                          <MathText text={h.prompt} />
-                        </p>
-                      )
                     )}
 
-                    {(correctWithoutWork || triedHardButWrong || timeOutlier) && (
+                    {(correctWithoutWork || triedHardButWrong || timeOutlier || changedAnswer || revisited) && (
                       <div className="mt-1.5 flex flex-wrap gap-1.5">
                         {correctWithoutWork && (
                           <Badge tone="neutral" title="필기 기록이 없습니다 - 암산했거나 찍었을 수 있습니다.">
@@ -184,13 +203,23 @@ export function SessionReview() {
                             {timeOutlier.outlierReason}
                           </Badge>
                         )}
+                        {changedAnswer && (
+                          <Badge tone={h.is_correct ? 'good' : 'warn'} title="처음 낸 답의 정오와 최종 답의 정오가 다릅니다.">
+                            {changedAnswer}
+                          </Badge>
+                        )}
+                        {revisited && (
+                          <Badge tone="neutral" title="시험 중 이 문항을 다시 열어본 횟수입니다. 풀이 시간은 머문 시간을 모두 더한 값입니다.">
+                            {h.visit_count}번 열어봄
+                          </Badge>
+                        )}
                       </div>
                     )}
 
                     {h.choices.length > 0 && (
                       <div className="mt-2 flex flex-col gap-1.5">
                         {h.choices.map((c) => {
-                          const wasSelected = c.id === h.selected_choice_id;
+                          const wasSelected = h.selected_choice_ids.includes(c.id);
                           return (
                             <div
                               key={c.id}
@@ -215,15 +244,15 @@ export function SessionReview() {
                       </div>
                     )}
 
-                    {h.choices.length === 0 && (
-                      <div className="mt-2 flex flex-col gap-1 text-xs">
-                        <p className={`font-bold ${h.is_correct ? 'text-good' : 'text-danger'}`}>
-                          학생 답: {h.short_answer_text || '(무응답)'}
-                        </p>
-                        {!h.is_correct && h.correct_short_answers && h.correct_short_answers.length > 0 && (
-                          <p className="text-ink-soft">정답: {h.correct_short_answers.join(', ')}</p>
-                        )}
-                      </div>
+                    {h.type === 'short' && (
+                      <ShortAnswerGrading
+                        key={`${h.question_id}-${h.awarded_points}`}
+                        examId={examId}
+                        sessionId={sid}
+                        item={h}
+                        editable={finished}
+                        onSaved={reloadAfterGrade}
+                      />
                     )}
 
                     <div className="mt-2 flex items-center gap-3 text-[11px] text-ink-soft">

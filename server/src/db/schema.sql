@@ -45,11 +45,22 @@ CREATE TABLE IF NOT EXISTS questions (
   -- AI 추출 시 원본 이미지에서 이 문항 발문 영역만 잘라낸 이미지 (uploads 기준 상대 경로).
   -- 수식/도형/선긋기처럼 텍스트로 옮기면 깨지기 쉬운 내용을 원본 그대로 보여주기 위함.
   prompt_image_path TEXT,
+  -- 1이면 이미지는 그림 자료일 뿐이고 문제 설명은 prompt 텍스트로 따로 보여준다(텍스트 아래에
+  -- 이미지). 0이면 이미지 안에 문제 전체가 들어 있다고 보고 이미지만 보여준다.
+  show_prompt_text INTEGER NOT NULL DEFAULT 0,
   -- AI 추출 때 사용한 시험지 페이지 원본. 같은 페이지의 여러 문항이 같은 경로를 공유하며,
   -- 교사 인증이 필요한 재자르기 API에서만 제공한다.
   source_image_path TEXT,
   points REAL NOT NULL DEFAULT 1,
   correct_short_answers TEXT,
+  -- 객관식 "옳은 것을 모두 고르시오" 문항. 1이면 학생이 보기를 여러 개 고르고,
+  -- 정답으로 표시된 보기 전체와 정확히 일치해야만 정답 처리한다(부분 점수 없음).
+  multi_select INTEGER NOT NULL DEFAULT 0,
+  -- 단답형 채점 방식. 'exact'는 correct_short_answers 중 하나와 일치해야 정답, 'keyword'는
+  -- 서술형으로 keyword_rubric(JSON: [{keywords: string[], weight: number}])의 키워드 그룹이
+  -- 답안에 들어 있는 만큼 부분 점수를 준다. 모든 그룹을 맞혀야 정답(is_correct=1)이다.
+  grading_mode TEXT NOT NULL DEFAULT 'exact',
+  keyword_rubric TEXT,
   ai_suggested INTEGER NOT NULL DEFAULT 0,
   -- AI가 이 문항에 제안한 성취기준 후보 전체(2~3개, confidence/rationale 포함)를 JSON
   -- 배열로 담아둔다. 실제로 태그된 성취기준(question_standards)은 그중 1순위만 자동
@@ -126,12 +137,22 @@ CREATE TABLE IF NOT EXISTS answers (
   session_id INTEGER NOT NULL REFERENCES exam_sessions(id) ON DELETE CASCADE,
   question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
   selected_choice_id INTEGER REFERENCES choices(id),
+  -- "모두 고르기" 문항의 답(보기 id JSON 배열). 이때 selected_choice_id는 NULL이다.
+  selected_choice_ids TEXT,
   short_answer_text TEXT,
   shown_at TEXT NOT NULL,
   answered_at TEXT,
+  -- 이 문항 화면에 머문 시간의 합계. 학생이 문항을 오갈 수 있어서, 들어올 때마다 visit_started_at을
+  -- 찍고 떠날 때(다음/이전/답안 확인/제출) 머문 만큼 더한다.
   time_spent_ms INTEGER,
+  visit_started_at TEXT,
+  visit_count INTEGER NOT NULL DEFAULT 0,
+  -- 처음 낸 답의 정오(이후 답을 고쳐도 그대로). "처음엔 맞았는데 고쳐서 틀림" 같은 분석용.
+  first_is_correct INTEGER,
   is_correct INTEGER,
   awarded_points REAL,
+  -- 교사가 결과 화면에서 점수를 직접 고쳤으면 1. 자동 채점 결과가 아니라는 표시다.
+  graded_by_teacher INTEGER NOT NULL DEFAULT 0,
   -- 이 문항을 풀 때 남긴 필기(S-Pen/손가락) 원본 - 획 좌표 배열을 JSON으로 그대로 저장한다.
   -- 답만으론 안 보이는 풀이 과정(시도했는지, 어디서 막혔는지)을 나중에 리포트에서 다시
   -- 그려볼 수 있게 하기 위함. 필기가 없으면 NULL.
@@ -166,6 +187,7 @@ CREATE TABLE IF NOT EXISTS review_answers (
   assignment_id INTEGER NOT NULL REFERENCES review_assignments(id) ON DELETE CASCADE,
   question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
   selected_choice_id INTEGER REFERENCES choices(id),
+  selected_choice_ids TEXT,
   short_answer_text TEXT,
   is_correct INTEGER NOT NULL,
   answered_at TEXT NOT NULL,

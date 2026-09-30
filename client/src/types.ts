@@ -25,6 +25,19 @@ export interface StandardCandidate {
   rationale: string;
 }
 
+export type GradingMode = 'exact' | 'keyword';
+
+// 서술형 채점 기준 한 줄 - keywords 중 하나라도 답안에 있으면 이 그룹을 맞힌 것(동의어 목록).
+export interface KeywordGroup {
+  keywords: string[];
+  weight: number;
+}
+
+// 교사 화면용 채점 결과 - 그룹마다 답안에서 찾은 표현(없으면 null).
+export interface KeywordGroupResult extends KeywordGroup {
+  matched: string | null;
+}
+
 export interface Question {
   id: number;
   exam_id: number;
@@ -32,9 +45,16 @@ export interface Question {
   type: QuestionType;
   prompt: string;
   prompt_image_path: string | null;
+  // true면 이미지는 그림 자료이고 문제 설명은 prompt 텍스트로 함께 보여준다.
+  show_prompt_text: boolean;
   source_image_path: string | null;
   points: number;
   correct_short_answers: string[] | null;
+  // "옳은 것을 모두 고르시오" 문항 - 정답 보기 전체와 정확히 일치해야 정답.
+  multi_select: boolean;
+  // 단답형 채점 방식 - 'keyword'면 서술형으로 keyword_rubric의 키워드 그룹 포함 비율만큼 부분 점수.
+  grading_mode: GradingMode;
+  keyword_rubric: KeywordGroup[];
   ai_suggested: boolean;
   // AI가 제안한 성취기준 후보 전체(관련도 순, 1순위는 이미 standards에 자동 태그됨) - 교사가
   // AI 판단을 검토할 때 참고용. AI로 만들어지지 않은 문항은 null.
@@ -126,22 +146,31 @@ export interface PublicQuestion {
   type: QuestionType;
   prompt: string;
   prompt_image_path: string | null;
+  show_prompt_text: boolean;
   points: number;
+  multi_select: boolean;
+  essay: boolean;
   choices: PublicChoice[];
 }
 
+// 학생이 지금 보고 있는 곳 - 문항(question) 또는 마지막 문항 다음의 답안 확인 화면(summary).
 export interface CurrentQuestionResponse {
   done: boolean;
   timedOut?: boolean;
-  reviewMode?: boolean;
-  pendingCount?: number;
+  summary?: boolean;
+  // 답안 확인 화면: 문항 순서대로 답했는지 여부
+  answered?: boolean[];
   index?: number;
   total?: number;
+  answered_count?: number;
   question?: PublicQuestion;
-}
-
-export interface PendingQuestionsResponse {
-  questions: PublicQuestion[];
+  // 이미 답했거나 필기해 둔 문항으로 돌아왔을 때 되살릴 값
+  my_answer?: {
+    answered: boolean;
+    selected_choice_ids: number[];
+    short_answer_text: string;
+    strokes: StrokesPayload | null;
+  };
 }
 
 export interface ReviewQuestionsResponse {
@@ -225,8 +254,14 @@ export interface QuestionStudentAnswer {
   roll_number: number;
   name: string | null;
   is_correct: number;
+  awarded_points: number | null;
+  graded_by_teacher: boolean;
+  // 서술형에서 부분 점수이거나 부정 표현이 섞여 교사가 한 번 봐야 하는 답안.
+  needs_review: boolean;
   time_spent_ms: number | null;
   selected_choice_id: number | null;
+  // 고른 보기 id 전부("모두 고르기"가 아니면 0~1개).
+  selected_choice_ids: number[];
   selected_choice_text: string | null;
   short_answer_text: string | null;
   isOutlier: boolean;
@@ -243,6 +278,7 @@ export interface SessionQuestionOutlier {
 export interface QuestionBreakdown {
   avgTimeMs: number | null;
   accuracy: number | null;
+  points: number;
   students: QuestionStudentAnswer[];
 }
 
@@ -286,6 +322,8 @@ export interface MonitorStudent {
   score: number | null;
   max_score: number | null;
   disqualify_reason: string | null;
+  // 답을 낸 문항 수 - 학생이 문항을 앞뒤로 오가므로 진행률은 현재 위치가 아니라 이것으로 본다.
+  answered_count: number | null;
 }
 
 export interface ExamMonitorData {
@@ -309,17 +347,30 @@ export interface MonitorCurrentQuestion {
   type: QuestionType;
   prompt: string;
   prompt_image_path: string | null;
+  show_prompt_text: boolean;
   choices: { id: number; order_index: number; text: string; is_correct: boolean }[];
 }
 
 export interface MonitorHistoryItem {
+  question_id: number;
   order_index: number;
   type: QuestionType;
   prompt: string;
+  points: number;
+  essay: boolean;
+  show_prompt_text: boolean;
+  // 이 문항 화면에 들어온 횟수와, 처음 낸 답의 정오(답을 고쳤는지 보기 위함)
+  visit_count: number;
+  first_is_correct: number | null;
+  keyword_groups: KeywordGroupResult[] | null;
+  needs_review: boolean;
+  graded_by_teacher: boolean;
   prompt_image_path: string | null;
   choices: { id: number; order_index: number; text: string; is_correct: boolean }[];
   correct_short_answers: string[] | null;
+  multi_select: boolean;
   selected_choice_id: number | null;
+  selected_choice_ids: number[];
   selected_choice_text: string | null;
   short_answer_text: string | null;
   is_correct: number | null;

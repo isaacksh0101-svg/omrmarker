@@ -15,6 +15,7 @@ import { cropQuestionImages } from '../services/cropQuestionImages.js';
 import { prepareAiImage } from '../services/prepareAiImage.js';
 import { renderPdfToImages } from '../services/renderPdfPages.js';
 import { requireAuth } from '../middleware/auth.js';
+import { sanitizeKeywordRubric } from '../services/keywordGrading.js';
 import { parseDocumentWithUpstage } from '../services/upstageDocumentParse.js';
 
 export const aiRouter = Router();
@@ -142,6 +143,7 @@ aiRouter.post('/:id/ai-extract-answers', requireAuth, upload.single('file'), asy
   const questionInfos = exam.questions.map((q) => ({
     order_index: q.order_index,
     type: q.type,
+    essay: q.type === 'short' && q.grading_mode === 'keyword',
     numChoices: q.choices.length,
   }));
 
@@ -172,24 +174,52 @@ aiRouter.post('/:id/ai-extract-answers', requireAuth, upload.single('file'), asy
   }
 
   // 같은 문항 번호가 여러 쪽에 걸쳐 나오는 일은 없다고 보고, 나중 값이 있으면 그걸로 덮는다.
-  const byNumber = new Map(extractedAnswers.map((a) => [a.question_number, a.answer]));
+  const byNumber = new Map(extractedAnswers.map((a) => [a.question_number, a]));
   const applied = [];
   const skipped = [];
+  // 서술형 결과는 따로 알려준다 - AI가 추천한 키워드는 교사가 꼭 확인해야 하고, 이미 교사가
+  // 입력해 둔 키워드는 덮어쓰지 않는다.
+  const keywordSuggested = [];
+  const keywordKept = [];
 
   for (const q of exam.questions) {
-    const raw = byNumber.get(q.order_index + 1);
-    if (raw === undefined) {
+    const extracted = byNumber.get(q.order_index + 1);
+    if (q.type === 'short' && q.grading_mode === 'keyword') {
+      if (q.keyword_rubric.length > 0) {
+        keywordKept.push(q.order_index + 1);
+        continue;
+      }
+      // 한 글자 표현("빛" 등)은 다른 낱말에 섞여 잘못 인정되기 쉬워 AI 추천에서는 뺀다
+      // (교사가 필요하면 직접 넣을 수 있다).
+      const rubric = sanitizeKeywordRubric(
+        (extracted?.keyword_groups ?? []).map((keywords) => ({
+          keywords: keywords.filter((k) => k.replace(/\s+/g, '').length >= 2),
+          weight: 1,
+        })),
+      );
+      if (rubric.length === 0) {
+        skipped.push(q.order_index + 1);
+        continue;
+      }
+      await repo.setKeywordGrading(q.id, 'keyword', rubric);
+      keywordSuggested.push(q.order_index + 1);
+      continue;
+    }
+    const raw = extracted?.answer;
+    if (!raw) {
       skipped.push(q.order_index + 1);
       continue;
     }
     if (q.type === 'mc') {
-      const n = Number(raw);
-      if (!Number.isInteger(n) || n < 1 || n > q.choices.length) {
+      // "2, 4"처럼 정답 번호가 여러 개면 "모두 고르기" 문항으로 보고 자동으로 켠다.
+      const numbers = [...new Set(String(raw).split(/[,\s]+/).filter(Boolean).map(Number))];
+      if (numbers.length === 0 || numbers.some((n) => !Number.isInteger(n) || n < 1 || n > q.choices.length)) {
         skipped.push(q.order_index + 1);
         continue;
       }
-      const choices = q.choices.map((c, i) => ({ text: c.text, is_correct: i === n - 1 }));
+      const choices = q.choices.map((c, i) => ({ text: c.text, is_correct: numbers.includes(i + 1) }));
       await repo.setChoices(q.id, choices);
+      if (numbers.length > 1 && !q.multi_select) await repo.setMultiSelect(q.id, true);
       applied.push(q.order_index + 1);
     } else {
       const answers = raw
@@ -205,5 +235,11 @@ aiRouter.post('/:id/ai-extract-answers', requireAuth, upload.single('file'), asy
     }
   }
 
-  res.json({ exam: await repo.getExamFull(examId), applied, skipped });
+  res.json({
+    exam: await repo.getExamFull(examId),
+    applied,
+    skipped,
+    keyword_suggested: keywordSuggested,
+    keyword_kept: keywordKept,
+  });
 });

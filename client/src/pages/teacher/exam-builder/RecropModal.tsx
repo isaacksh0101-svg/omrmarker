@@ -250,7 +250,7 @@ export function RecropModal({ examId, questionId, onClose, onDone, mode = 'repla
       >
         <div className="flex items-center justify-between border-b border-line px-5 py-4">
           <h2 className="text-sm font-bold text-ink">
-            {mode === 'append' ? '추가 정보 크롭하기' : '문항 이미지 다시 자르기'}
+            {mode === 'append' ? '추가 정보 크롭하기' : existingImagePath ? '문항 이미지 다시 자르기' : '문항 이미지 추가'}
           </h2>
           <button className="text-xs text-ink-soft hover:text-danger" onClick={onClose}>
             닫기
@@ -263,7 +263,7 @@ export function RecropModal({ examId, questionId, onClose, onDone, mode = 'repla
               ? 'AI 분석에 사용한 원본 페이지를 불러오는 중입니다.'
               : hasSavedSource
                 ? 'AI 분석에 사용한 원본 페이지입니다. 문항 영역을 바로 선택하세요.'
-                : '이전 버전에서 만든 문항이라 저장된 원본이 없습니다. 원본 PDF나 이미지를 선택하세요.'}
+                : '넣을 그림이 있는 PDF나 이미지 파일을 선택한 뒤, 보여줄 영역을 선택하세요.'}
           </p>
           <div className="mt-3 flex items-center gap-2">
             <input

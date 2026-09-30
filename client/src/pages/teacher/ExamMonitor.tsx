@@ -73,7 +73,7 @@ function StudentCard({
   );
   const progressPct =
     student.status === 'in_progress' && questionCount > 0
-      ? Math.min(100, Math.round(((student.current_question_index ?? 0) / questionCount) * 100))
+      ? Math.min(100, Math.round(((student.answered_count ?? 0) / questionCount) * 100))
       : 0;
 
   return (
@@ -98,9 +98,15 @@ function StudentCard({
         {student.status === 'in_progress' ? (
           <>
             <div className="flex items-center justify-between text-xs">
-              <span className="font-bold text-ink-soft">현재 문제</span>
+              {/* 학생이 문항을 앞뒤로 오가므로 진행률은 "답한 문항 수"로 보여주고, 지금 보고 있는
+                  문제는 옆에 따로 적는다(문항 수와 같으면 답안 확인 화면). */}
+              <span className="font-bold text-ink-soft">
+                {(student.current_question_index ?? 0) >= questionCount
+                  ? '답안 확인 중'
+                  : `${(student.current_question_index ?? 0) + 1}번 보는 중`}
+              </span>
               <span className="font-bold text-ink">
-                {(student.current_question_index ?? 0) + 1} / {questionCount}
+                {student.answered_count ?? 0} / {questionCount} 답함
               </span>
             </div>
             <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-line">

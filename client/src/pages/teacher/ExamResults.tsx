@@ -9,6 +9,7 @@ import { StatCard, StatCardRow } from '../../components/StatCard';
 import { Pagination } from '../../components/Pagination';
 import { IconChevronRight } from '../../components/icons';
 import { downloadWorkbook } from '../../lib/exportXlsx';
+import { formatPoints } from '../../lib/keywordGrading';
 
 // 서버(assessmentInsights.js)의 MIN_SAMPLE_SIZE와 맞춘 값 - 이 밑으로는 이상치/변별도
 // 계산 자체를 서버에서 안 하므로, 화면에서도 왜 지표가 비어 보이는지 미리 안내한다.
@@ -120,7 +121,7 @@ export function ExamResults() {
   const [questionSort, setQuestionSort] = useState<'number' | 'accuracy' | 'time' | 'discrimination'>('number');
   const [notableOnly, setNotableOnly] = useState(false);
   const [questionPage, setQuestionPage] = useState(1);
-  const [answerFilter, setAnswerFilter] = useState<'all' | 'correct' | 'wrong'>('all');
+  const [answerFilter, setAnswerFilter] = useState<'all' | 'correct' | 'wrong' | 'review'>('all');
   const [choiceFilter, setChoiceFilter] = useState<number | null>(null);
   const [studentFilter, setStudentFilter] = useState<'all' | 'attention' | 'unfinished' | 'forced'>('all');
   const [studentPage, setStudentPage] = useState(1);
@@ -436,7 +437,8 @@ export function ExamResults() {
             const filteredStudents = (breakdown?.students ?? []).filter((student) => {
               if (answerFilter === 'correct' && !student.is_correct) return false;
               if (answerFilter === 'wrong' && student.is_correct) return false;
-              if (choiceFilter != null && student.selected_choice_id !== choiceFilter) return false;
+              if (answerFilter === 'review' && !student.needs_review) return false;
+              if (choiceFilter != null && !student.selected_choice_ids.includes(choiceFilter)) return false;
               return true;
             });
             return (
@@ -513,7 +515,10 @@ export function ExamResults() {
                     ) : (
                       <>
                         <div className="mb-2 flex items-center gap-1 text-[11px]">
-                          {(['all', 'wrong', 'correct'] as const).map((filter) => (
+                          {(breakdown.students.some((s) => s.needs_review)
+                            ? (['all', 'wrong', 'correct', 'review'] as const)
+                            : (['all', 'wrong', 'correct'] as const)
+                          ).map((filter) => (
                             <button
                               key={filter}
                               type="button"
@@ -522,7 +527,13 @@ export function ExamResults() {
                               }`}
                               onClick={() => setAnswerFilter(filter)}
                             >
-                              {filter === 'all' ? '전체' : filter === 'wrong' ? '오답만' : '정답만'}
+                              {filter === 'all'
+                                ? '전체'
+                                : filter === 'wrong'
+                                  ? '오답만'
+                                  : filter === 'correct'
+                                    ? '정답만'
+                                    : '검토 필요'}
                             </button>
                           ))}
                           <span className="ml-auto text-ink-soft">{filteredStudents.length}명</span>
@@ -535,6 +546,13 @@ export function ExamResults() {
                             <span className={`shrink-0 font-bold ${s.is_correct ? 'text-ink-soft' : 'text-danger'}`}>
                               {s.is_correct ? '정답' : '오답'}
                             </span>
+                            {!s.is_correct && (s.awarded_points ?? 0) > 0 && (
+                              <span className="shrink-0 font-bold text-warn">
+                                부분 {formatPoints(s.awarded_points ?? 0)}/{formatPoints(breakdown.points)}
+                              </span>
+                            )}
+                            {s.needs_review && <Badge tone="warn">검토 필요</Badge>}
+                            {s.graded_by_teacher && <Badge tone="neutral">교사 채점</Badge>}
                             <span className="shrink-0 text-ink-soft">{formatMs(s.time_spent_ms)}</span>
                             {s.isOutlier && <Badge tone="warn">{s.outlierReason}</Badge>}
                             <button
@@ -578,6 +596,7 @@ export function ExamResults() {
                     key={s.code}
                     label={`[${s.code}]`}
                     sublabel={s.statement}
+                    wrapSublabel
                     metric={formatMs(s.avg_time_spent_ms)}
                     correct={s.correct_count}
                     total={s.attempted_count}
@@ -614,6 +633,7 @@ export function ExamResults() {
         </div>
         {showStudents && (
         <>
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-line text-center text-xs font-bold text-ink-soft">
@@ -645,11 +665,21 @@ export function ExamResults() {
                   {s.submitted_at ? formatSubmittedAt(s.submitted_at) : '-'}
                 </td>
                 <td className="px-3 py-2.5">
-                  {s.isOutlier && <Badge tone="warn">{s.outlierReasons.join(', ')}</Badge>}
+                  {/* 이유 문구가 길어 이 칸이 표를 옆으로 밀어내면 오른쪽 "오답 재풀이" 칸이 잘린다 -
+                      이유마다 배지를 나누고 좁은 폭 안에서 줄바꿈되게 한다. */}
+                  {s.isOutlier && (
+                    <div className="mx-auto flex max-w-[11rem] flex-wrap justify-center gap-1">
+                      {s.outlierReasons.map((reason) => (
+                        <Badge key={reason} tone="warn" wrap>
+                          {reason}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
                 </td>
                 <td className="whitespace-nowrap px-3 py-2.5">
                   {s.session_id != null && (s.status === 'submitted' || s.status === 'force_submitted') && (
-                    <div className="flex items-center justify-center gap-1.5">
+                    <div className="flex flex-wrap items-center justify-center gap-1">
                       {s.review_status ? (
                         <>
                           <button type="button" className="rounded-lg bg-good/10 px-2.5 py-1.5 text-xs font-bold text-good hover:bg-good/20" onClick={(event) => { event.stopPropagation(); openReviewDetail(s.session_id!, s.roll_number); }}>
@@ -676,6 +706,7 @@ export function ExamResults() {
             )}
           </tbody>
         </table>
+        </div>
         <Pagination page={safeStudentPage} totalPages={studentTotalPages} onChange={setStudentPage} />
         </>
         )}

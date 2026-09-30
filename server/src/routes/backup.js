@@ -234,9 +234,9 @@ export function applyCategoryImport(targetDb, category, filePath) {
 
       const insertQuestion = targetDb.prepare(
         `INSERT INTO questions
-           (exam_id, order_index, type, prompt, prompt_image_path, points, correct_short_answers,
-            ai_suggested, ai_standard_candidates, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (exam_id, order_index, type, prompt, prompt_image_path, show_prompt_text, points, correct_short_answers,
+            multi_select, grading_mode, keyword_rubric, ai_suggested, ai_standard_candidates, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       for (const q of targetDb.prepare('SELECT * FROM src.questions').all()) {
         const newExamId = examIdMap.get(q.exam_id);
@@ -247,8 +247,13 @@ export function applyCategoryImport(targetDb, category, filePath) {
           q.type,
           q.prompt,
           q.prompt_image_path,
+          q.show_prompt_text ?? 0,
           q.points,
           q.correct_short_answers,
+          // 이 기능들 이전에 만든 백업에는 컬럼이 없다.
+          q.multi_select ?? 0,
+          q.grading_mode ?? 'exact',
+          q.keyword_rubric ?? null,
           q.ai_suggested,
           q.ai_standard_candidates,
           q.created_at,

@@ -5,7 +5,8 @@ import type { ReviewQuestionsResponse } from '../../types';
 import { Button } from '../../components/Button';
 import { Badge } from '../../components/Badge';
 import { Card } from '../../components/Card';
-import { MathText } from '../../components/MathText';
+import { ChoiceNumberPicker, ChoiceTextList } from '../../components/ChoiceList';
+import { QuestionPrompt } from '../../components/QuestionPrompt';
 import { PenCanvas, type PenCanvasHandle, type PenTool } from '../../components/PenCanvas';
 import { IconEraser, IconFingerDraw, IconGrip, IconPen, IconTrash, IconUndo } from '../../components/icons';
 import { isFullscreenSupported, requestFullscreenCompat } from '../../lib/fullscreen';
@@ -42,13 +43,15 @@ export function ReviewMistakes() {
   const accessToken = localStorage.getItem(`omr_session_${id}`) ?? '';
   const [data, setData] = useState<ReviewQuestionsResponse | null>(null);
   const [index, setIndex] = useState(0);
-  const [selectedChoice, setSelectedChoice] = useState<number | null>(null);
+  const [selectedChoices, setSelectedChoices] = useState<number[]>([]);
   const [shortAnswer, setShortAnswer] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 방금 낸 답이 틀렸다는 걸 보여주는 표시 - 오답이면 다음 문항으로 넘기지 않고 같은
   // 문항에 머물러서, 맞힐 때까지 다시 고르게 한다.
   const [wrongFeedback, setWrongFeedback] = useState(false);
+  // 서술형 재풀이에서 핵심 내용을 몇 개 담았는지(어떤 키워드인지는 알려주지 않는다).
+  const [essayProgress, setEssayProgress] = useState<{ matched: number; total: number } | null>(null);
   const [penTool, setPenTool] = useState<PenTool>('pen');
   const [penColor, setPenColor] = useState(PEN_COLORS[0]);
   // 기기를 공유하는 교실 특성상 저장해두지 않는다 - 매번 펜 모드로 새로 시작한다(TakeExam과 동일).
@@ -85,7 +88,7 @@ export function ReviewMistakes() {
   const correctCount = useMemo(() => data?.answers.filter((answer) => !!answer.is_correct).length ?? 0, [data]);
   const completed = data?.assignment.status === 'completed' || (!!data && correctCount >= data.questions.length);
   const question = data?.questions[index];
-  const canSubmit = question?.type === 'mc' ? selectedChoice != null : shortAnswer.trim().length > 0;
+  const canSubmit = question?.type === 'mc' ? selectedChoices.length > 0 : shortAnswer.trim().length > 0;
 
   useEffect(() => {
     penRef.current?.clear();
@@ -128,20 +131,29 @@ export function ReviewMistakes() {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.post<{ is_correct: boolean; done: boolean; answered_count: number }>(
+      const result = await api.post<{
+        is_correct: boolean;
+        done: boolean;
+        answered_count: number;
+        essay_progress: { matched: number; total: number } | null;
+      }>(
         `/exams/${id}/review/answer`,
         {
           access_token: accessToken,
           question_id: question.id,
-          selected_choice_id: selectedChoice,
+          ...(question.multi_select
+            ? { selected_choice_ids: selectedChoices }
+            : { selected_choice_id: selectedChoices[0] ?? null }),
           short_answer_text: shortAnswer,
         },
       );
       if (!result.is_correct) {
         // 틀렸으면 다음으로 넘어가지 않고 같은 문항에 머문다 - 선택은 비워서 다시 고르게 한다.
         setWrongFeedback(true);
-        setSelectedChoice(null);
-        setShortAnswer('');
+        setEssayProgress(result.essay_progress);
+        setSelectedChoices([]);
+        // 서술형은 쓴 답을 지우지 않고 빠진 내용을 보태서 다시 내게 한다.
+        if (!question.essay) setShortAnswer('');
         return;
       }
       setWrongFeedback(false);
@@ -150,7 +162,7 @@ export function ReviewMistakes() {
         setData(refreshed);
       } else {
         setIndex((value) => value + 1);
-        setSelectedChoice(null);
+        setSelectedChoices([]);
         setShortAnswer('');
       }
     } catch (cause) {
@@ -235,17 +247,25 @@ export function ReviewMistakes() {
         <div className="relative min-h-[calc(100%+100vh)] px-6 py-8 sm:px-10">
           <div className="max-w-md">
             <p className="mb-4 text-sm font-bold text-ink-soft">원래 시험 {question.order_index + 1}번</p>
-            {question.prompt_image_path ? <img src={`/uploads/${question.prompt_image_path}`} alt={`${question.order_index + 1}번 문항`} className="max-w-full rounded-lg border border-line" /> : <p className="whitespace-pre-wrap text-xl font-bold text-ink"><MathText text={question.prompt} /></p>}
+            <QuestionPrompt prompt={question.prompt} imagePath={question.prompt_image_path} showPromptText={question.show_prompt_text} alt={`${question.order_index + 1}번 문항`} />
           </div>
+          {question.type === 'mc' && <ChoiceTextList choices={question.choices} />}
           <PenCanvas ref={penRef} active tool={penTool} color={penColor} allowTouch={fingerMode} onStrokesChange={setHasStrokes} />
         </div>
       </div>
     </div>
     <div ref={floatRef} className="fixed z-20 flex max-w-[calc(100vw-16px)] flex-wrap items-center gap-2 rounded-2xl border border-line bg-panel px-4 py-3 shadow-lg" style={{ left: panelPosition.x, top: panelPosition.y }}>
       <button type="button" aria-label="답안 입력창 위치 옮기기" className="-ml-1 flex h-7 w-6 touch-none items-center justify-center text-ink-soft" onPointerDown={dragStart} onPointerMove={dragMove} onPointerUp={() => { dragRef.current = null; }} onPointerCancel={() => { dragRef.current = null; }}><IconGrip className="h-4 w-4" /></button>
-      {wrongFeedback && <p className="w-full text-sm font-bold text-danger">오답이에요. 다시 골라보세요.</p>}
-      {question.type === 'short' && <input value={shortAnswer} onChange={(event) => { setShortAnswer(event.target.value); setWrongFeedback(false); }} placeholder="정답 입력" className="w-full min-w-0 rounded-xl border border-line bg-bg px-4 py-2.5 text-lg outline-none focus:border-accent sm:w-[28rem]" />}
-      {question.type === 'mc' && <div className="flex flex-wrap gap-2">{question.choices.map((choice, choiceIndex) => <button key={choice.id} onClick={() => { setSelectedChoice(choice.id); setWrongFeedback(false); }} className={`${question.prompt_image_path ? 'h-11 w-11 rounded-full text-center' : 'rounded-xl px-3.5 py-2.5 text-left'} border text-base font-bold ${selectedChoice === choice.id ? 'border-accent bg-accent-soft text-accent-ink' : 'border-line bg-panel text-ink'}`}>{question.prompt_image_path ? choiceIndex + 1 : <MathText text={choice.text} />}</button>)}</div>}
+      {wrongFeedback && (
+        <p className="w-full text-sm font-bold text-danger">
+          {question.essay && essayProgress
+            ? `핵심 내용 ${essayProgress.total}개 중 ${essayProgress.matched}개를 썼어요. 빠진 내용을 보태서 다시 제출해보세요.`
+            : '오답이에요. 다시 골라보세요.'}
+        </p>
+      )}
+      {question.type === 'short' && question.essay && <textarea rows={4} value={shortAnswer} onChange={(event) => { setShortAnswer(event.target.value); setWrongFeedback(false); }} placeholder="답을 문장으로 써주세요" className="w-full min-w-0 resize-none rounded-xl border border-line bg-bg px-4 py-2.5 text-lg outline-none focus:border-accent sm:w-[32rem]" />}
+      {question.type === 'short' && !question.essay && <input value={shortAnswer} onChange={(event) => { setShortAnswer(event.target.value); setWrongFeedback(false); }} placeholder="정답 입력" className="w-full min-w-0 rounded-xl border border-line bg-bg px-4 py-2.5 text-lg outline-none focus:border-accent sm:w-[28rem]" />}
+      {question.type === 'mc' && <ChoiceNumberPicker choices={question.choices} selectedIds={selectedChoices} multiSelect={question.multi_select} onChange={(next) => { setSelectedChoices(next); setWrongFeedback(false); }} />}
       <Button className="text-base" disabled={!canSubmit || submitting} onClick={submit}>{submitting ? '제출 중...' : index + 1 === data.questions.length ? '재풀이 제출' : '다음'}</Button>
       {error && <p className="w-full text-xs font-bold text-danger">{error}</p>}
     </div>

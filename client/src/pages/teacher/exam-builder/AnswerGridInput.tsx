@@ -1,6 +1,8 @@
-import { useRef, useState } from 'react';
+import { Fragment, useRef, useState } from 'react';
 import { api } from '../../../api/client';
 import type { Question } from '../../../types';
+import { KeywordRubricEditor } from './KeywordRubricEditor';
+import { QuestionKindSelect } from './QuestionKindSelect';
 
 interface CellProps {
   examId: number;
@@ -9,18 +11,46 @@ interface CellProps {
   onChanged: () => void;
   inputRef: (el: HTMLInputElement | null) => void;
   onEnter: () => void;
+  rubricOpen: boolean;
+  onToggleRubric: () => void;
 }
 
-function AnswerInput({ examId, question, isInvalid, onChanged, inputRef, onEnter }: CellProps) {
-  const correctIndex = question.choices.findIndex((c) => c.is_correct);
-  const [mcNumber, setMcNumber] = useState(correctIndex >= 0 ? String(correctIndex + 1) : '');
+function correctNumbersText(question: Question) {
+  return question.choices
+    .map((c, i) => (c.is_correct ? String(i + 1) : null))
+    .filter(Boolean)
+    .join(', ');
+}
+
+// "2, 4" / "2 4" 처럼 적은 정답 번호들을 읽는다. 범위를 벗어난 번호가 하나라도 있으면 null.
+function parseMcNumbers(value: string, choiceCount: number) {
+  const numbers = [...new Set(value.split(/[,\s]+/).filter(Boolean).map(Number))];
+  if (numbers.length === 0 || numbers.some((n) => !Number.isInteger(n) || n < 1 || n > choiceCount)) return null;
+  return numbers;
+}
+
+function AnswerInput({
+  examId,
+  question,
+  isInvalid,
+  onChanged,
+  inputRef,
+  onEnter,
+  rubricOpen,
+  onToggleRubric,
+}: CellProps) {
+  const [mcNumber, setMcNumber] = useState(correctNumbersText(question));
   const [shortAnswer, setShortAnswer] = useState((question.correct_short_answers ?? []).join(', '));
 
   async function saveMcNumber() {
-    const n = Number(mcNumber);
-    if (!Number.isInteger(n) || n < 1 || n > question.choices.length) return;
-    const choices = question.choices.map((c, i) => ({ text: c.text, is_correct: i === n - 1 }));
+    const numbers = parseMcNumbers(mcNumber, question.choices.length);
+    if (!numbers) return;
+    const choices = question.choices.map((c, i) => ({ text: c.text, is_correct: numbers.includes(i + 1) }));
     await api.put(`/exams/${examId}/questions/${question.id}/choices`, { choices });
+    // 정답을 여러 개 적었다면 "모두 고르기" 문항이라는 뜻이다(복수정답 인정은 지원하지 않음).
+    if (numbers.length > 1 && !question.multi_select) {
+      await api.put(`/exams/${examId}/questions/${question.id}`, { multi_select: true });
+    }
     onChanged();
   }
 
@@ -47,13 +77,25 @@ function AnswerInput({ examId, question, isInvalid, onChanged, inputRef, onEnter
   const inputClass =
     'h-9 w-full min-w-0 bg-transparent px-3 text-center text-sm text-ink outline-none focus:bg-accent-soft';
 
+  if (question.type === 'short' && question.grading_mode === 'keyword') {
+    // 서술형은 한 칸에 적을 수 없어 아래 펼침 행에서 채점 기준을 편집한다.
+    const count = question.keyword_rubric.length;
+    return (
+      <button
+        type="button"
+        title={isInvalid ? '서술형 채점 키워드가 설정되지 않았습니다.' : undefined}
+        className="h-9 w-full px-3 text-center text-xs font-bold text-accent hover:bg-accent-soft"
+        onClick={onToggleRubric}
+      >
+        {count > 0 ? `핵심 내용 ${count}개` : '채점 키워드 입력'} {rubricOpen ? '▲' : '▼'}
+      </button>
+    );
+  }
+
   return question.type === 'mc' ? (
     <input
       ref={inputRef}
-      type="number"
-      min={1}
-      max={question.choices.length || undefined}
-      placeholder={`정답 번호(1~${question.choices.length || '?'})`}
+      placeholder={question.multi_select ? '예: 2, 4' : `정답 번호(1~${question.choices.length || '?'})`}
       title={isInvalid ? '정답이 설정되지 않았습니다.' : undefined}
       className={inputClass}
       value={mcNumber}
@@ -82,15 +124,56 @@ interface Props {
   onChanged: () => void;
 }
 
+interface OptionProps {
+  examId: number;
+  question: Question;
+  onChanged: () => void;
+  onEssayEnabled: () => void;
+}
+
+// 문항 유형(객관식/단답형/서술형)과, 객관식이면 "모두 고르기" 옵션.
+function QuestionOption({ examId, question, onChanged, onEssayEnabled }: OptionProps) {
+  async function toggleMultiSelect(next: boolean) {
+    await api.put(`/exams/${examId}/questions/${question.id}`, { multi_select: next });
+    onChanged();
+  }
+  return (
+    <div className="flex items-center justify-center gap-2 px-2 py-1">
+      <QuestionKindSelect
+        examId={examId}
+        question={question}
+        onChanged={onChanged}
+        onKindChanged={(kind) => kind === 'essay' && onEssayEnabled()}
+      />
+      {question.type === 'mc' && (
+        <label
+          className="flex cursor-pointer items-center gap-1 text-[11px] font-bold text-ink-soft"
+          title="옳은 것을 모두 고르는 문항 - 정답 번호를 쉼표로 여러 개 적고, 학생은 전부 맞게 골라야 정답"
+        >
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-accent"
+            checked={question.multi_select}
+            onChange={(e) => toggleMultiSelect(e.target.checked)}
+          />
+          모두 고르기
+        </label>
+      )}
+    </div>
+  );
+}
+
 // 문제 내용과 상관없이 정답만 순서대로 빠르게 입력하는 엑셀 스타일 표. "문항 번호" · "정답"
 // 두 열로 된 실제 엑셀 답안지와 같은 모양을 그대로 따른다. 교사가 이미 정답지를 들고 있는
 // 상황을 전제로 한다 - 문항 바로 아래에 정답을 넣을 필요가 없다는 피드백에 따라 온라인/종이
 // 두 모드 모두 이 컴포넌트 하나로 정답 입력을 처리한다.
 export function AnswerGridInput({ examId, questions, missingByQuestion, onChanged }: Props) {
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const [openRubricId, setOpenRubricId] = useState<number | null>(null);
 
+  // 서술형 행은 입력칸이 없으므로 건너뛰고 다음 입력칸으로 간다.
   function focusNext(index: number) {
-    const el = inputRefs.current[index + 1];
+    const el = inputRefs.current.slice(index + 1).find(Boolean);
     if (el) {
       el.focus();
       el.select();
@@ -102,33 +185,62 @@ export function AnswerGridInput({ examId, questions, missingByQuestion, onChange
   }
 
   return (
-    <div className="mx-auto max-w-xs overflow-hidden rounded-xl border border-line">
+    <div className="mx-auto max-w-lg overflow-hidden rounded-xl border border-line">
       <table className="w-full border-collapse text-sm">
         <thead>
           <tr className="bg-surface-container">
             <th className="border-b border-line px-3 py-2 text-center text-xs font-bold text-ink-soft">문항 번호</th>
             <th className="border-b border-line px-3 py-2 text-center text-xs font-bold text-ink-soft">정답</th>
+            <th
+              className="w-44 border-b border-l border-line px-2 py-2 text-center text-xs font-bold text-ink-soft"
+              title="서술형은 교사가 정한 핵심 키워드가 답에 들어 있는 만큼 부분 점수를 줍니다"
+            >
+              유형 · 옵션
+            </th>
           </tr>
         </thead>
         <tbody>
           {questions.map((q, i) => {
             const isInvalid = !!missingByQuestion?.get(q.id);
+            const isEssay = q.type === 'short' && q.grading_mode === 'keyword';
+            const rubricOpen = isEssay && openRubricId === q.id;
             return (
-              <tr key={q.id} className={i > 0 ? 'border-t border-line' : ''}>
-                <td className="px-3 py-1.5 text-center font-bold text-ink">{q.order_index + 1}</td>
-                <td className={`border-l p-0 ${isInvalid ? 'border-danger bg-danger/5' : 'border-line'}`}>
-                  <AnswerInput
-                    examId={examId}
-                    question={q}
-                    isInvalid={isInvalid}
-                    onChanged={onChanged}
-                    inputRef={(el) => {
-                      inputRefs.current[i] = el;
-                    }}
-                    onEnter={() => focusNext(i)}
-                  />
-                </td>
-              </tr>
+              <Fragment key={q.id}>
+                <tr className={i > 0 ? 'border-t border-line' : ''}>
+                  <td className="px-3 py-1.5 text-center font-bold text-ink">{q.order_index + 1}</td>
+                  <td className={`border-l p-0 ${isInvalid ? 'border-danger bg-danger/5' : 'border-line'}`}>
+                    <AnswerInput
+                      // 문항 유형이 바뀌면 입력칸 상태를 새로 시작한다.
+                      key={`${q.type}-${q.grading_mode}`}
+                      examId={examId}
+                      question={q}
+                      isInvalid={isInvalid}
+                      onChanged={onChanged}
+                      inputRef={(el) => {
+                        inputRefs.current[i] = el;
+                      }}
+                      onEnter={() => focusNext(i)}
+                      rubricOpen={rubricOpen}
+                      onToggleRubric={() => setOpenRubricId(rubricOpen ? null : q.id)}
+                    />
+                  </td>
+                  <td className="border-l border-line text-center align-middle">
+                    <QuestionOption
+                      examId={examId}
+                      question={q}
+                      onChanged={onChanged}
+                      onEssayEnabled={() => setOpenRubricId(q.id)}
+                    />
+                  </td>
+                </tr>
+                {rubricOpen && (
+                  <tr className="border-t border-line">
+                    <td colSpan={3} className="p-0">
+                      <KeywordRubricEditor examId={examId} question={q} onChanged={onChanged} />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             );
           })}
         </tbody>

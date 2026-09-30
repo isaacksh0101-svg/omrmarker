@@ -1,18 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api } from '../../api/client';
-import type {
-  CurrentQuestionResponse,
-  ExamSession,
-  PendingQuestionsResponse,
-  PublicExam,
-  PublicQuestion,
-} from '../../types';
+import { api, ApiError } from '../../api/client';
+import type { CurrentQuestionResponse, ExamSession, PublicExam, PublicQuestion } from '../../types';
 import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
 import { Badge } from '../../components/Badge';
 import { PenCanvas, type PenCanvasHandle, type PenTool } from '../../components/PenCanvas';
-import { MathText } from '../../components/MathText';
+import { ChoiceNumberPicker, ChoiceTextList } from '../../components/ChoiceList';
+import { QuestionPrompt } from '../../components/QuestionPrompt';
 import { IconEraser, IconFingerDraw, IconGrip, IconPen, IconTrash, IconUndo } from '../../components/icons';
 import {
   addFullscreenChangeListener,
@@ -121,10 +116,10 @@ export function TakeExam() {
   const [exam, setExam] = useState<PublicExam | null>(null);
   const [session, setSession] = useState<ExamSession | null>(null);
   const [current, setCurrent] = useState<CurrentQuestionResponse | null>(null);
-  // null = 아직 1차 진행 중(건너뛴 문항 복습 단계가 아님). 배열이면 복습 단계 - 건너뛴 문항 목록.
-  const [pending, setPending] = useState<PublicQuestion[] | null>(null);
-  const [reviewOpenId, setReviewOpenId] = useState<number | null>(null);
-  const [selectedChoice, setSelectedChoice] = useState<number | null>(null);
+  // 답안 확인 화면에서 "최종 제출"을 한 번 누르면 답하지 않은 문항 경고를 보여주고, 한 번 더
+  // 눌러야 제출한다. 브라우저 confirm() 창은 화면 이탈(blur)로 잡혀 강제 종료되므로 쓰지 않는다.
+  const [confirmingSubmit, setConfirmingSubmit] = useState(false);
+  const [selectedChoices, setSelectedChoices] = useState<number[]>([]);
   const [shortAnswer, setShortAnswer] = useState('');
   const [remainingSec, setRemainingSec] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -181,34 +176,20 @@ export function TakeExam() {
     return s;
   }, [id, sessionId]);
 
-  // 건너뛴 문항들(복습 단계) 목록을 불러온다. 목록 화면으로 돌아가는 것도 겸한다
-  // (reviewOpenId를 비워서 지금 풀고 있던 문항 화면을 닫는다).
-  const loadPending = useCallback(async () => {
-    const res = await api.get<PendingQuestionsResponse>(`/exams/${id}/sessions/${sessionId}/pending-questions`);
-    setPending(res.questions);
-    setReviewOpenId(null);
-    setSelectedChoice(null);
-    setShortAnswer('');
-  }, [id, sessionId]);
-
+  // 지금 위치(문항 또는 답안 확인 화면)를 불러온다. 이미 답했거나 필기해 둔 문항이면 그 답을
+  // 입력칸에 되살린다(필기는 아래 effect에서 캔버스에 다시 그린다).
   const loadCurrentQuestion = useCallback(async () => {
     const c = await api.get<CurrentQuestionResponse>(`/exams/${id}/sessions/${sessionId}/current-question`);
     if (c.done) {
       await reloadSession();
       setCurrent(null);
-      setPending(null);
-      return;
-    }
-    if (c.reviewMode) {
-      setCurrent(null);
-      await loadPending();
       return;
     }
     setCurrent(c);
-    setPending(null);
-    setSelectedChoice(null);
-    setShortAnswer('');
-  }, [id, sessionId, reloadSession, loadPending]);
+    setConfirmingSubmit(false);
+    setSelectedChoices(c.my_answer?.selected_choice_ids ?? []);
+    setShortAnswer(c.my_answer?.short_answer_text ?? '');
+  }, [id, sessionId, reloadSession]);
 
   useEffect(() => {
     // 같은 /student/exam/:examId 라우트 안에서 다른 시험으로 이동하면 React가 이
@@ -216,8 +197,6 @@ export function TakeExam() {
     setExam(null);
     setSession(null);
     setCurrent(null);
-    setPending(null);
-    setReviewOpenId(null);
     setRemainingSec(null);
     setExamStarted(false);
     disqualifyingRef.current = false;
@@ -231,19 +210,18 @@ export function TakeExam() {
   }, [id, sessionId, navigate, reloadSession]);
 
   useEffect(() => {
-    if (session?.status === 'in_progress' && !current && !pending) {
+    if (session?.status === 'in_progress' && !current) {
       loadCurrentQuestion();
     }
-  }, [session, current, pending, loadCurrentQuestion]);
+  }, [session, current, loadCurrentQuestion]);
 
-  // 지금 풀고 있는 문항 - 1차 진행 중이면 current.question, 건너뛴 문항을 복습 중에 다시
-  // 열었으면 그 문항. 필기 낙서장을 문항이 바뀔 때마다 새로 시작하는 기준으로도 쓴다.
-  const activeQuestion: PublicQuestion | null =
-    reviewOpenId != null ? (pending?.find((q) => q.id === reviewOpenId) ?? null) : (current?.question ?? null);
+  // 지금 보고 있는 문항(답안 확인 화면이면 null).
+  const activeQuestion: PublicQuestion | null = current?.question ?? null;
 
+  // 문항이 바뀔 때마다 그 문항에 전에 써 둔 필기를 다시 그린다(처음 보는 문항이면 빈 캔버스).
   useEffect(() => {
-    penRef.current?.clear();
-  }, [activeQuestion?.id]);
+    penRef.current?.load(current?.my_answer?.strokes ?? null);
+  }, [activeQuestion?.id, current?.my_answer?.strokes]);
 
   useEffect(() => {
     const panel = floatRef.current;
@@ -323,7 +301,6 @@ export function TakeExam() {
       }
       await reloadSession();
       setCurrent(null);
-      setPending(null);
     }
 
     function onVisibilityChange() {
@@ -367,79 +344,62 @@ export function TakeExam() {
     setExamStarted(true);
   }
 
-  // 응답 하나를 서버에 반영한 뒤 화면을 어디로 옮길지는 서버 응답만 보고 정한다 - 1차
-  // 진행 중 문항이든, 건너뛴 뒤 복습 화면에서 뒤늦게 답한 문항이든 이 한 함수로 처리된다.
-  async function afterAnswerLikeResponse(result: CurrentQuestionResponse) {
-    if (result.done) {
-      await reloadSession();
-      setCurrent(null);
-      setPending(null);
-    } else if (result.reviewMode) {
-      await loadPending();
-    } else {
-      await loadCurrentQuestion();
-    }
-  }
-
-  async function submitAnswer() {
-    if (!activeQuestion) return;
+  // 지금 문항을 떠나 다른 곳으로 간다. 답이 있으면 저장(고쳐 낸 답은 다시 채점)하고, 없으면
+  // 필기만 남기고 이동한다. to: 'next' | 'prev' | 'summary' | 문항 번호(0부터).
+  async function move(to: 'next' | 'prev' | 'summary' | number) {
     setSubmitting(true);
     try {
-      const body: Record<string, unknown> = { question_id: activeQuestion.id };
-      if (activeQuestion.type === 'mc') body.selected_choice_id = selectedChoice;
-      else body.short_answer_text = shortAnswer;
-      const strokes = penRef.current?.getStrokes() ?? [];
-      if (strokes.length > 0) {
-        body.strokes = strokes;
-        body.strokes_canvas_size = penRef.current?.getCanvasSize();
+      const body: Record<string, unknown> = { to };
+      const q = activeQuestion;
+      let hasAnswer = false;
+      if (q) {
+        body.question_id = q.id;
+        const strokes = penRef.current?.getStrokes() ?? [];
+        if (strokes.length > 0) {
+          body.strokes = strokes;
+          body.strokes_canvas_size = penRef.current?.getCanvasSize();
+        }
+        if (q.type === 'mc') {
+          hasAnswer = selectedChoices.length > 0;
+          if (q.multi_select) body.selected_choice_ids = selectedChoices;
+          else body.selected_choice_id = selectedChoices[0] ?? null;
+        } else {
+          hasAnswer = !!shortAnswer.trim();
+          body.short_answer_text = shortAnswer;
+        }
       }
-
-      const result = await api.post<CurrentQuestionResponse>(`/exams/${id}/sessions/${sessionId}/answers`, body);
-      await afterAnswerLikeResponse(result);
-    } catch {
-      // 응답 전송 도중 화면 이탈이 감지돼 강제 종료됐을 수 있다 - 최신 세션
-      // 상태를 다시 불러와 종료 화면으로 전환한다.
-      await reloadSession();
-      setCurrent(null);
-      setPending(null);
+      const path = hasAnswer ? 'answers' : 'navigate';
+      const result = await api.post<{ done: boolean }>(`/exams/${id}/sessions/${sessionId}/${path}`, body);
+      if (result.done) {
+        await reloadSession();
+        setCurrent(null);
+      } else {
+        await loadCurrentQuestion();
+      }
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409) {
+        // 다른 기기에서 이미 다른 문항으로 이동했다 - 지금 위치를 다시 불러온다.
+        await loadCurrentQuestion();
+      } else {
+        // 전송 도중 화면 이탈이 감지돼 강제 종료됐을 수 있다 - 최신 세션 상태로 전환한다.
+        await reloadSession();
+        setCurrent(null);
+      }
     } finally {
       setSubmitting(false);
     }
   }
 
-  // 1차 진행 중인 문항을 답하지 않고 건너뛴다 - 나중에 복습 단계에서 다시 보여준다.
-  async function skipQuestion() {
-    if (!current?.question) return;
+  async function finalSubmit() {
     setSubmitting(true);
     try {
-      const result = await api.post<CurrentQuestionResponse>(`/exams/${id}/sessions/${sessionId}/skip`, {
-        question_id: current.question.id,
-      });
-      await afterAnswerLikeResponse(result);
+      await api.post(`/exams/${id}/sessions/${sessionId}/final-submit`);
     } catch {
-      await reloadSession();
-      setCurrent(null);
-      setPending(null);
-    } finally {
-      setSubmitting(false);
+      // 이미 시간 초과 등으로 끝났을 수 있다 - 아래에서 최신 상태를 불러온다.
     }
-  }
-
-  // 복습 목록에서 문항 하나를 "포기"로 마감한다(빈 답 처리) - 목록 화면에서 바로 누른다.
-  async function giveUpQuestion(questionId: number) {
-    setSubmitting(true);
-    try {
-      const result = await api.post<CurrentQuestionResponse>(`/exams/${id}/sessions/${sessionId}/give-up`, {
-        question_id: questionId,
-      });
-      await afterAnswerLikeResponse(result);
-    } catch {
-      await reloadSession();
-      setCurrent(null);
-      setPending(null);
-    } finally {
-      setSubmitting(false);
-    }
+    await reloadSession();
+    setCurrent(null);
+    setSubmitting(false);
   }
 
   if (!session || !exam) {
@@ -533,42 +493,60 @@ export function TakeExam() {
     );
   }
 
-  // in_progress - 건너뛴 문항 복습 목록 화면 (아직 하나도 열지 않은 상태)
-  if (pending && reviewOpenId === null) {
+  // in_progress - 마지막 문항 다음의 답안 확인 화면. 번호를 누르면 그 문항으로 가고,
+  // "최종 제출"을 눌러야 제출된다.
+  if (current?.summary) {
+    const answered = current.answered ?? [];
+    const unanswered = answered.filter((a) => !a).length;
     return (
       <div className="mx-auto flex min-h-screen max-w-2xl flex-col px-6 py-10">
-        <h1 className="text-xl font-bold text-ink">건너뛴 문제 다시 보기</h1>
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-xl font-bold text-ink">답안 확인</h1>
+          {remainingSec !== null && (
+            <Badge tone={remainingSec <= 30 ? 'danger' : 'neutral'}>{formatTime(remainingSec)}</Badge>
+          )}
+        </div>
         <p className="mt-1 text-sm text-ink-soft">
-          아직 답하지 않은 문제가 {pending.length}개 남아있어요. 풀거나, 포기하고 제출할 수 있어요.
+          {answered.length}문항 중 {answered.length - unanswered}문항에 답했어요. 번호를 누르면 그 문제로 돌아가서
+          답을 고칠 수 있어요.
         </p>
-        <div className="mt-6 flex flex-col gap-2">
-          {pending.map((pq) => (
-            <div
-              key={pq.id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-line bg-panel px-4 py-3"
+        <div className="mt-6 flex flex-wrap gap-2.5">
+          {answered.map((done, index) => (
+            <button
+              key={index}
+              disabled={submitting}
+              onClick={() => move(index)}
+              className={`flex h-12 w-12 items-center justify-center rounded-xl border-2 text-base font-bold transition-colors ${
+                done ? 'border-accent bg-accent-soft text-accent-ink' : 'border-danger/40 bg-panel text-danger'
+              }`}
             >
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-bold text-ink-soft">{pq.order_index + 1}번</p>
-                <p className="truncate text-sm text-ink">
-                  {pq.prompt ? (
-                    <MathText text={pq.prompt} />
-                  ) : pq.prompt_image_path ? (
-                    '(그림 문항)'
-                  ) : (
-                    '(종이 시험지 문항)'
-                  )}
-                </p>
-              </div>
-              <div className="flex shrink-0 gap-2">
-                <Button variant="secondary" onClick={() => setReviewOpenId(pq.id)}>
-                  풀기
-                </Button>
-                <Button variant="danger" disabled={submitting} onClick={() => giveUpQuestion(pq.id)}>
-                  포기
-                </Button>
-              </div>
-            </div>
+              {index + 1}
+            </button>
           ))}
+        </div>
+        {unanswered > 0 && (
+          <p className="mt-3 text-sm font-bold text-danger">빨간 번호는 아직 답하지 않은 문제예요.</p>
+        )}
+        {confirmingSubmit && (
+          <p className="mt-6 rounded-xl border border-danger/30 bg-danger/5 px-4 py-3 text-sm font-bold text-danger">
+            {unanswered > 0
+              ? `답하지 않은 문제가 ${unanswered}개 있어요. 제출하면 틀린 것으로 처리되고 더 이상 고칠 수 없어요.`
+              : '제출하면 더 이상 답을 고칠 수 없어요.'}
+          </p>
+        )}
+        <div className="mt-6 flex flex-wrap gap-2">
+          <Button variant="secondary" className="text-base" disabled={submitting} onClick={() => move('prev')}>
+            마지막 문제로 돌아가기
+          </Button>
+          {confirmingSubmit ? (
+            <Button variant="danger" className="text-base" disabled={submitting} onClick={finalSubmit}>
+              정말 제출하기
+            </Button>
+          ) : (
+            <Button className="text-base" disabled={submitting} onClick={() => setConfirmingSubmit(true)}>
+              최종 제출
+            </Button>
+          )}
         </div>
       </div>
     );
@@ -578,9 +556,8 @@ export function TakeExam() {
     return <div className="p-10 text-sm text-ink-soft">다음 문항을 불러오는 중...</div>;
   }
   const q = activeQuestion;
-  const isReview = reviewOpenId != null;
-  const isLast = !isReview && (current?.index ?? 0) + 1 >= (current?.total ?? 0);
-  const canSubmit = !submitting && (q.type === 'mc' ? selectedChoice !== null : !!shortAnswer.trim());
+  const questionIndex = current?.index ?? 0;
+  const isLast = questionIndex + 1 >= (current?.total ?? 0);
   const panelMinX = visibleViewport.offsetLeft + 8;
   const panelMinY = visibleViewport.offsetTop + 8;
   const panelMaxX = Math.max(
@@ -605,8 +582,7 @@ export function TakeExam() {
         <div className="min-w-0 flex-1">
           <p className="truncate text-base font-bold text-ink">{exam.title}</p>
         </div>
-        <Badge tone={isReview ? 'warn' : 'neutral'}>
-          {isReview ? '복습 · ' : ''}
+        <Badge tone="neutral">
           {q.order_index + 1} / {exam.question_count}
         </Badge>
         {remainingSec !== null && (
@@ -690,20 +666,15 @@ export function TakeExam() {
               더 넓은 빈 연습장이 이어서 나온다. */}
           <div className="relative min-h-[calc(100%+100vh)] px-6 py-8 sm:px-10">
             <div className="max-w-md">
-              {q.prompt_image_path ? (
-                <img
-                  src={`/uploads/${q.prompt_image_path}`}
-                  alt={`${q.order_index + 1}번 문항`}
-                  className="max-w-full rounded-lg border border-line"
-                />
-              ) : q.prompt ? (
-                <p className="whitespace-pre-wrap text-xl font-bold text-ink">
-                  <MathText text={q.prompt} />
-                </p>
-              ) : (
-                <p className="text-xl text-ink-soft">종이 시험지의 {q.order_index + 1}번 문항을 마킹하세요.</p>
-              )}
+              <QuestionPrompt
+                prompt={q.prompt}
+                imagePath={q.prompt_image_path}
+                showPromptText={q.show_prompt_text}
+                alt={`${q.order_index + 1}번 문항`}
+                fallback={<p className="text-xl text-ink-soft">종이 시험지의 {q.order_index + 1}번 문항을 마킹하세요.</p>}
+              />
             </div>
+            {q.type === 'mc' && <ChoiceTextList choices={q.choices} />}
 
             {/* 필기는 문제/선택지 영역을 포함한 연습장 전체 위에 덮인다 - 켜져 있는 동안엔
                 기본적으로 S-Pen 입력만 받고(팜 리젝션) 손가락은 무시하지만, 손가락 필기
@@ -741,7 +712,16 @@ export function TakeExam() {
         >
           <IconGrip className="h-4 w-4" />
         </button>
-        {q.type === 'short' && (
+        {q.type === 'short' && q.essay && (
+          <textarea
+            rows={4}
+            className="w-full min-w-0 resize-none rounded-xl border border-line bg-bg px-4 py-2.5 text-lg text-ink outline-none focus:border-accent sm:w-[32rem]"
+            placeholder="답을 문장으로 써주세요"
+            value={shortAnswer}
+            onChange={(e) => setShortAnswer(e.target.value)}
+          />
+        )}
+        {q.type === 'short' && !q.essay && (
           <input
             className="w-full min-w-0 rounded-xl border border-line bg-bg px-4 py-2.5 text-lg text-ink outline-none focus:border-accent sm:w-[28rem]"
             placeholder="정답 입력"
@@ -749,54 +729,28 @@ export function TakeExam() {
             onChange={(e) => setShortAnswer(e.target.value)}
           />
         )}
-        {q.type === 'mc' && q.prompt_image_path && (
-          <div className="flex flex-wrap gap-2">
-            {q.choices.map((c, i) => (
-              <button
-                key={c.id}
-                className={`h-11 w-11 rounded-full border text-base font-bold transition-all duration-150 ${
-                  selectedChoice === c.id
-                    ? 'border-accent bg-accent-soft text-accent-ink'
-                    : 'border-line bg-panel text-ink hover:border-accent/50'
-                }`}
-                onClick={() => setSelectedChoice(c.id)}
-              >
-                {i + 1}
-              </button>
-            ))}
-          </div>
+        {/* 보기 문구는 본문(ChoiceTextList)에서 읽고, 여기서는 번호만 고른다 - 문항 종류나
+            보기 길이가 달라도 "정답을 고르는 자리"는 항상 같은 모양이어야 한다. */}
+        {q.type === 'mc' && (
+          <ChoiceNumberPicker
+            choices={q.choices}
+            selectedIds={selectedChoices}
+            multiSelect={q.multi_select}
+            onChange={setSelectedChoices}
+          />
         )}
-        {/* 이미지에 보기가 이미 포함된 경우(위)엔 번호만 고르면 되지만, 텍스트로만 된
-            문항(수동으로 직접 만든 문항 등)은 보기 내용을 여기서도 보여줘야 한다 - 문항
-            종류가 달라도 "정답을 고르는 자리"는 항상 화면 오른쪽 아래로 같아야 한다. */}
-        {q.type === 'mc' && !q.prompt_image_path && (
-          <div className="flex flex-wrap justify-end gap-2">
-            {q.choices.map((c) => (
-              <button
-                key={c.id}
-                className={`rounded-xl border px-3.5 py-2.5 text-left text-base transition-all duration-150 ${
-                  selectedChoice === c.id
-                    ? 'border-accent bg-accent-soft text-accent-ink'
-                    : 'border-line bg-panel text-ink hover:border-accent/50'
-                }`}
-                onClick={() => setSelectedChoice(c.id)}
-              >
-                <MathText text={c.text} />
-              </button>
-            ))}
-          </div>
-        )}
-        {isReview ? (
-          <Button variant="secondary" className="text-base" disabled={submitting} onClick={loadPending}>
-            목록으로
-          </Button>
-        ) : (
-          <Button variant="secondary" className="text-base" disabled={submitting} onClick={skipQuestion}>
-            건너뛰기
-          </Button>
-        )}
-        <Button className="text-base" disabled={!canSubmit} onClick={submitAnswer}>
-          {isReview ? '제출' : isLast ? '제출하기' : '다음'}
+        {/* 답을 골랐으면 저장하고 이동, 안 골랐으면 그냥 이동(건너뛰기)한다. 마지막 문제 다음은
+            답안 확인 화면이고, 제출은 그 화면에서만 한다. */}
+        <Button
+          variant="secondary"
+          className="text-base"
+          disabled={submitting || questionIndex === 0}
+          onClick={() => move('prev')}
+        >
+          이전
+        </Button>
+        <Button className="text-base" disabled={submitting} onClick={() => move('next')}>
+          {isLast ? '답안 확인' : '다음'}
         </Button>
       </div>
     </div>

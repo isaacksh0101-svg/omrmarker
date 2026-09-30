@@ -8,6 +8,12 @@ import {
   attachQuestionStudentInsights,
   attachSessionInsights,
 } from '../services/assessmentInsights.js';
+import {
+  gradeKeywordAnswer,
+  keywordAnswerNeedsReview,
+  keywordAwardedPoints,
+  parseKeywordRubric,
+} from '../services/keywordGrading.js';
 
 export const sessionsRouter = Router();
 
@@ -26,8 +32,82 @@ function sanitizeQuestionForStudent(q, examMode) {
     type: q.type,
     prompt: examMode === 'paper_marking' ? '' : q.prompt,
     prompt_image_path: examMode === 'paper_marking' ? null : q.prompt_image_path,
+    // 이미지가 그림 자료일 뿐이면 문제 설명 텍스트도 함께 보여준다.
+    show_prompt_text: Boolean(q.show_prompt_text),
     points: q.points,
-    choices: q.choices.map((c) => ({ id: c.id, order_index: c.order_index, text: c.text })),
+    multi_select: Boolean(q.multi_select),
+    // 서술형이면 학생 화면이 여러 줄 입력칸을 보여준다(채점 키워드는 보내지 않는다).
+    essay: isKeywordQuestion(q),
+    // 종이 마킹 모드는 학생이 종이 시험지를 보고 번호만 고르므로 보기 문구를 보내지 않는다.
+    choices: q.choices.map((c, i) => ({
+      id: c.id,
+      order_index: c.order_index,
+      text: examMode === 'paper_marking' ? String(i + 1) : c.text,
+    })),
+  };
+}
+
+// 객관식 채점. 한 개만 고르는 문항은 selected_choice_id를, "모두 고르기" 문항은
+// selected_choice_ids 배열을 받아 정답 보기 집합과 정확히 일치할 때만 정답으로 본다.
+// 저장용 값도 같이 돌려줘서 본시험/오답 재풀이 두 경로가 같은 규칙을 쓰게 한다.
+function gradeMultipleChoice(question, body) {
+  if (question.multi_select) {
+    const validIds = new Set(question.choices.map((c) => c.id));
+    const raw = Array.isArray(body?.selected_choice_ids) ? body.selected_choice_ids : [];
+    const selectedIds = [...new Set(raw.filter((id) => Number.isInteger(id) && validIds.has(id)))];
+    const correctIds = question.choices.filter((c) => c.is_correct).map((c) => c.id);
+    const isCorrect =
+      selectedIds.length > 0 &&
+      selectedIds.length === correctIds.length &&
+      correctIds.every((id) => selectedIds.includes(id));
+    return { selectedChoiceId: null, selectedChoiceIds: selectedIds, isCorrect };
+  }
+  const selectedChoiceId = Number.isInteger(body?.selected_choice_id) ? body.selected_choice_id : null;
+  const choice = question.choices.find((c) => c.id === selectedChoiceId);
+  return { selectedChoiceId: choice ? selectedChoiceId : null, selectedChoiceIds: null, isCorrect: Boolean(choice?.is_correct) };
+}
+
+// 서술형 답안이 비정상적으로 길어 DB가 부풀지 않도록 넉넉한 길이에서 자른다.
+const MAX_SHORT_ANSWER_LENGTH = 5000;
+function readShortAnswerText(body) {
+  const text = typeof body?.short_answer_text === 'string' ? body.short_answer_text : '';
+  return text.slice(0, MAX_SHORT_ANSWER_LENGTH);
+}
+
+function isKeywordQuestion(q) {
+  return q.type === 'short' && q.grading_mode === 'keyword';
+}
+
+// 단답형 채점. 일반 단답형은 인정 답안 중 하나와 같으면 만점, 서술형은 맞힌 키워드 그룹
+// 비율만큼 부분 점수를 주고 전부 맞혔을 때만 정답(is_correct)으로 본다 - 오답 재풀이와
+// 정답률 통계가 "정답/오답" 두 가지로만 돌아가기 때문이다.
+function gradeShortAnswer(question, answerText) {
+  if (isKeywordQuestion(question)) {
+    const { ratio } = gradeKeywordAnswer(question.keyword_rubric, answerText);
+    return { isCorrect: ratio === 1, awardedPoints: keywordAwardedPoints(question.points, ratio) };
+  }
+  const accepted = (question.correct_short_answers ?? []).map(normalizeShortAnswer);
+  const isCorrect = accepted.includes(normalizeShortAnswer(answerText));
+  return { isCorrect, awardedPoints: isCorrect ? question.points : 0 };
+}
+
+// 단답형 비교용 정규화. "건조 기후"와 "건조기후"처럼 띄어쓰기만 다른 답은 같은 답으로 보고,
+// "건조 기후."처럼 끝에 붙은 문장부호도 무시한다. 소수점("3.5")·분수("1/2")·음수("-3")는
+// 답의 일부라 건드리지 않도록 문장부호는 맨 끝에 있는 것만 뗀다.
+function normalizeShortAnswer(text) {
+  return String(text ?? '')
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[.。!?~]+$/, '');
+}
+
+// 교사 화면용: 서술형 답안의 그룹별 매칭 결과와 검토 필요 여부.
+function keywordReviewInfo(question, answerText, gradedByTeacher) {
+  if (!isKeywordQuestion(question)) return { keyword_groups: null, needs_review: false };
+  const { groups, ratio } = gradeKeywordAnswer(question.keyword_rubric, answerText);
+  return {
+    keyword_groups: groups,
+    needs_review: !gradedByTeacher && keywordAnswerNeedsReview(ratio, answerText),
   };
 }
 
@@ -316,129 +396,20 @@ function isTimedOut(session, exam) {
 
 // 1차 진행(순서대로 문항을 보여주는 단계)이 끝났을 때 호출한다. 건너뛴(응답 안 한) 문항이
 // 남아 있으면 그것부터 마저 처리하게 하고, 하나도 없으면 그제서야 실제로 제출 확정한다.
-async function finishForwardPassOrReview(examId, sessionId) {
-  const pending = await repo.countPendingAnswers(sessionId);
-  if (pending > 0) {
-    emitExamMonitorUpdate(examId);
-    return { done: false, reviewMode: true, pendingCount: pending };
-  }
-  await repo.finalizeSession(sessionId);
-  emitExamMonitorUpdate(examId);
-  return { done: true };
-}
+// ---- 학생 응시 진행 ----
+// 학생은 [이전]/[다음]으로 문항을 오가고, 마지막 문항 다음의 "답안 확인" 화면에서 최종 제출한다.
+// current_question_index는 "지금 보고 있는 문항"이고, 문항 수와 같으면 답안 확인 화면이다.
+// 답을 낸 문항에 돌아와 고쳐 내면 다시 채점한다. 시간 초과·강제 종료만 즉시 제출된다.
 
-sessionsRouter.get('/:id/sessions/:sessionId/current-question', async (req, res) => {
-  const examId = Number(req.params.id);
-  const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
-  if (!session) return;
-  const sessionId = session.id;
-  const exam = await repo.getExamFull(examId);
-
-  if (session.status === 'submitted' || session.status === 'force_submitted') {
-    return res.json({ done: true });
-  }
-  if (session.status !== 'in_progress') {
-    return res.status(400).json({ error: '아직 시작하지 않은 세션입니다.' });
-  }
-
-  if (isTimedOut(session, exam)) {
-    await repo.finalizeSession(sessionId);
-    emitExamMonitorUpdate(examId);
-    return res.json({ done: true, timedOut: true });
-  }
-
-  const question = exam.questions[session.current_question_index];
-  if (!question) {
-    return res.json(await finishForwardPassOrReview(examId, sessionId));
-  }
-
-  const existingAnswer = await repo.getAnswer(sessionId, question.id);
-  if (!existingAnswer) {
-    await repo.createAnswerShown(sessionId, question.id, now());
-  }
-
-  res.json({
-    done: false,
-    index: session.current_question_index,
-    total: exam.questions.length,
-    question: sanitizeQuestionForStudent(question, exam.mode),
-  });
-});
-
-// 건너뛴(응답 안 하고 지나간) 문항들 - 1차 진행을 다 돌고 나서 다시 보여줄 목록.
-sessionsRouter.get('/:id/sessions/:sessionId/pending-questions', async (req, res) => {
-  const examId = Number(req.params.id);
-  const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
-  if (!session) return;
-  const sessionId = session.id;
-  const exam = await repo.getExamFull(examId);
-
-  const pendingIds = await repo.getPendingQuestionIds(sessionId);
-  const questions = pendingIds
-    .map((qid) => exam.questions.find((q) => q.id === qid))
-    .filter(Boolean)
-    .map((q) => sanitizeQuestionForStudent(q, exam.mode));
-
-  res.json({ questions });
-});
-
-sessionsRouter.post('/:id/sessions/:sessionId/answers', async (req, res) => {
-  const examId = Number(req.params.id);
-  const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
-  if (!session) return;
-  const sessionId = session.id;
-  const exam = await repo.getExamFull(examId);
-
-  if (session.status !== 'in_progress') {
-    return res.status(400).json({ error: '응시 중인 세션이 아닙니다.' });
-  }
-  if (isTimedOut(session, exam)) {
-    await repo.finalizeSession(sessionId);
-    emitExamMonitorUpdate(examId);
-    return res.json({ done: true, timedOut: true });
-  }
-
-  const questionId = Number(req.body.question_id);
-  const question = exam.questions.find((q) => q.id === questionId);
-  if (!question) {
-    return res.status(400).json({ error: '문항을 찾을 수 없습니다.' });
-  }
-
-  const answerRow = await repo.getAnswer(sessionId, questionId);
-  if (!answerRow || answerRow.answered_at) {
-    return res.status(400).json({ error: '이미 응답한 문항입니다.' });
-  }
-
-  let isCorrect = 0;
-  let selectedChoiceId = null;
-  let shortAnswerText = null;
-
-  if (question.type === 'mc') {
-    selectedChoiceId = Number.isInteger(req.body.selected_choice_id)
-      ? req.body.selected_choice_id
-      : null;
-    const choice = question.choices.find((c) => c.id === selectedChoiceId);
-    isCorrect = choice?.is_correct ? 1 : 0;
-  } else {
-    shortAnswerText = typeof req.body.short_answer_text === 'string' ? req.body.short_answer_text : '';
-    const normalize = (s) => s.trim().toLowerCase();
-    const accepted = (question.correct_short_answers ?? []).map(normalize);
-    isCorrect = accepted.includes(normalize(shortAnswerText)) ? 1 : 0;
-  }
-
-  const awardedPoints = isCorrect ? question.points : 0;
-  const answeredAt = now();
-  const timeSpentMs = Date.now() - new Date(answerRow.shown_at).getTime();
-
-  // 필기(strokes)는 교사가 나중에 풀이과정을 다시 볼 수 있도록 그대로 저장한다. 다만
-  // 비정상적으로 긴 필기(악의적 페이로드 포함)로 DB가 부풀지 않도록, 문항 하나당 넉넉한
-  // 점 개수(획 전체 합산 4만 개 - 몇 페이지를 빼곡히 채워도 남는 여유)에서 잘라낸다.
-  // 문자열을 그냥 자르면 JSON이 깨지므로, stroke 단위로 담다가 상한에 닿으면 멈춘다.
-  // 좌표는 캡처 당시 캔버스 크기(width/height) 기준이라, 나중에 다른 크기 화면에서 같은
-  // 비율로 다시 그리려면 그 크기도 같이 저장해야 한다.
+// 필기(strokes)는 교사가 나중에 풀이과정을 다시 볼 수 있도록 그대로 저장한다. 다만 비정상적으로
+// 긴 필기(악의적 페이로드 포함)로 DB가 부풀지 않도록, 문항 하나당 넉넉한 점 개수(획 전체 합산
+// 4만 개 - 몇 페이지를 빼곡히 채워도 남는 여유)에서 잘라낸다. 문자열을 그냥 자르면 JSON이
+// 깨지므로 stroke 단위로 담다가 상한에 닿으면 멈춘다. 좌표는 캡처 당시 캔버스 크기 기준이라,
+// 다른 크기 화면에서 같은 비율로 다시 그리려면 그 크기도 같이 저장해야 한다.
+function readStrokesJson(body) {
   const MAX_STROKE_POINTS = 40_000;
-  const rawStrokes = Array.isArray(req.body.strokes) ? req.body.strokes : [];
-  const canvasSize = req.body.strokes_canvas_size;
+  const rawStrokes = Array.isArray(body?.strokes) ? body.strokes : [];
+  const canvasSize = body?.strokes_canvas_size;
   const cappedStrokes = [];
   let pointCount = 0;
   for (const stroke of rawStrokes) {
@@ -447,102 +418,162 @@ sessionsRouter.post('/:id/sessions/:sessionId/answers', async (req, res) => {
     cappedStrokes.push(stroke);
     pointCount += points;
   }
-  const strokesJson =
-    cappedStrokes.length > 0 && Number(canvasSize?.width) > 0 && Number(canvasSize?.height) > 0
-      ? JSON.stringify({ width: canvasSize.width, height: canvasSize.height, strokes: cappedStrokes })
-      : null;
+  return cappedStrokes.length > 0 && Number(canvasSize?.width) > 0 && Number(canvasSize?.height) > 0
+    ? JSON.stringify({ width: canvasSize.width, height: canvasSize.height, strokes: cappedStrokes })
+    : null;
+}
 
-  await repo.submitAnswer(sessionId, questionId, {
-    selectedChoiceId,
-    shortAnswerText,
-    answeredAt,
-    timeSpentMs,
-    isCorrect,
-    awardedPoints,
-    strokesJson,
-  });
+// 'next' | 'prev' | 'summary' | 문항 번호(0부터)를 이동할 위치로 바꾼다. 문항 수(total)는 답안 확인 화면.
+function resolveNavigationTarget(to, currentIndex, total) {
+  if (to === 'prev') return Math.max(0, Math.min(currentIndex, total) - 1);
+  if (to === 'summary') return total;
+  if (Number.isInteger(to)) return Math.max(0, Math.min(to, total));
+  return Math.min(currentIndex + 1, total);
+}
 
-  // 지금 답한 문항이 1차 진행 중인 "현재" 문항이면 다음으로 넘어간다. 건너뛰었다가 복습
-  // 화면에서 뒤늦게 답한 거라면(1차 진행은 이미 끝난 상태) 진행 위치는 그대로 둔다.
-  const isInSequence = questionId === exam.questions[session.current_question_index]?.id;
-  if (isInSequence) {
-    const nextIndex = session.current_question_index + 1;
-    await repo.advanceSession(sessionId, nextIndex);
-    if (nextIndex >= exam.questions.length) {
-      return res.json(await finishForwardPassOrReview(examId, sessionId));
-    }
-    emitExamMonitorUpdate(examId);
-    return res.json({ done: false });
-  }
-
-  const pending = await repo.countPendingAnswers(sessionId);
-  if (pending === 0) {
-    await repo.finalizeSession(sessionId);
-    emitExamMonitorUpdate(examId);
-    return res.json({ done: true });
-  }
-  emitExamMonitorUpdate(examId);
-  res.json({ done: false, reviewMode: true, pendingCount: pending });
-});
-
-// 지금 문항에 답하지 않고 건너뛴다 - 1차 진행 중인 "현재" 문항에만 쓸 수 있다(복습 화면에서
-// 다시 보여준 문항은 답하거나 포기하거나 둘 중 하나만 가능).
-sessionsRouter.post('/:id/sessions/:sessionId/skip', async (req, res) => {
+// 응시 중인지·시간이 남았는지 확인한다. 끝났으면 응답까지 보내고 null을 돌려준다.
+async function loadActiveSession(req, res) {
   const examId = Number(req.params.id);
   const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
-  if (!session) return;
-  const sessionId = session.id;
+  if (!session) return null;
   const exam = await repo.getExamFull(examId);
-
+  if (session.status === 'submitted' || session.status === 'force_submitted') {
+    res.json({ done: true });
+    return null;
+  }
   if (session.status !== 'in_progress') {
-    return res.status(400).json({ error: '응시 중인 세션이 아닙니다.' });
+    res.status(400).json({ error: '응시 중인 세션이 아닙니다.' });
+    return null;
   }
   if (isTimedOut(session, exam)) {
-    await repo.finalizeSession(sessionId);
+    await repo.finalizeSession(session.id);
     emitExamMonitorUpdate(examId);
-    return res.json({ done: true, timedOut: true });
+    res.json({ done: true, timedOut: true });
+    return null;
   }
+  return { examId, session, exam };
+}
+
+// 지금 보고 있는 문항을 떠난다 - 필기를 남기고 머문 시간을 마감한 뒤 목적지로 옮긴다.
+async function leaveCurrentQuestion({ examId, session, exam }, body, { strokesAlreadySaved = false } = {}) {
+  const current = exam.questions[session.current_question_index];
+  if (current) {
+    if (!strokesAlreadySaved) await repo.saveQuestionStrokes(session.id, current.id, readStrokesJson(body));
+    await repo.closeQuestionVisit(session.id, current.id, now());
+  }
+  const target = resolveNavigationTarget(body?.to, session.current_question_index, exam.questions.length);
+  await repo.advanceSession(session.id, target);
+  emitExamMonitorUpdate(examId);
+}
+
+// 요청이 가리키는 문항이 지금 보고 있는 문항인지 - 다른 기기/탭에서 이미 이동했으면 막는다.
+function isCurrentQuestion(exam, session, questionId) {
+  return exam.questions[session.current_question_index]?.id === questionId;
+}
+
+sessionsRouter.get('/:id/sessions/:sessionId/current-question', async (req, res) => {
+  const active = await loadActiveSession(req, res);
+  if (!active) return;
+  const { session, exam } = active;
+  const total = exam.questions.length;
+  const answeredIds = new Set(await repo.getAnsweredQuestionIds(session.id));
 
   const question = exam.questions[session.current_question_index];
-  const questionId = Number(req.body.question_id);
-  if (!question || question.id !== questionId) {
-    return res.status(400).json({ error: '현재 문항과 일치하지 않습니다.' });
+  if (!question) {
+    // 답안 확인 화면 - 문항별로 답했는지만 알려준다.
+    return res.json({
+      done: false,
+      summary: true,
+      total,
+      answered: exam.questions.map((q) => answeredIds.has(q.id)),
+    });
   }
 
-  const nextIndex = session.current_question_index + 1;
-  await repo.advanceSession(sessionId, nextIndex);
-  if (nextIndex >= exam.questions.length) {
-    return res.json(await finishForwardPassOrReview(examId, sessionId));
+  await repo.openQuestionVisit(session.id, question.id, now());
+  const answer = await repo.getAnswer(session.id, question.id);
+  res.json({
+    done: false,
+    index: session.current_question_index,
+    total,
+    answered_count: answeredIds.size,
+    question: sanitizeQuestionForStudent(question, exam.mode),
+    // 이미 답했거나 필기해 둔 문항으로 돌아왔을 때 화면을 그대로 되살리기 위한 값
+    my_answer: {
+      answered: Boolean(answer?.answered_at),
+      selected_choice_ids: repo.parseSelectedChoiceIds(answer?.selected_choice_id ?? null, answer?.selected_choice_ids),
+      short_answer_text: answer?.answered_at ? (answer.short_answer_text ?? '') : '',
+      strokes: answer?.strokes_json ? JSON.parse(answer.strokes_json) : null,
+    },
+  });
+});
+
+// 지금 문항에 답을 내고(고쳐 내도 됨) body.to 방향으로 이동한다(기본 'next').
+sessionsRouter.post('/:id/sessions/:sessionId/answers', async (req, res) => {
+  const active = await loadActiveSession(req, res);
+  if (!active) return;
+  const { session, exam } = active;
+
+  const questionId = Number(req.body.question_id);
+  const question = exam.questions.find((q) => q.id === questionId);
+  if (!question) return res.status(400).json({ error: '문항을 찾을 수 없습니다.' });
+  if (!isCurrentQuestion(exam, session, questionId)) {
+    return res.status(409).json({ error: '현재 문항과 일치하지 않습니다.' });
   }
-  emitExamMonitorUpdate(examId);
+
+  let isCorrect = 0;
+  let awardedPoints = 0;
+  let selectedChoiceId = null;
+  let selectedChoiceIds = null;
+  let shortAnswerText = null;
+
+  if (question.type === 'mc') {
+    const graded = gradeMultipleChoice(question, req.body);
+    selectedChoiceId = graded.selectedChoiceId;
+    selectedChoiceIds = graded.selectedChoiceIds;
+    isCorrect = graded.isCorrect ? 1 : 0;
+    awardedPoints = graded.isCorrect ? question.points : 0;
+  } else {
+    shortAnswerText = readShortAnswerText(req.body);
+    const graded = gradeShortAnswer(question, shortAnswerText);
+    isCorrect = graded.isCorrect ? 1 : 0;
+    awardedPoints = graded.awardedPoints;
+  }
+
+  await repo.submitAnswer(session.id, questionId, {
+    selectedChoiceId,
+    selectedChoiceIds,
+    shortAnswerText,
+    answeredAt: now(),
+    isCorrect,
+    awardedPoints,
+    strokesJson: readStrokesJson(req.body),
+  });
+  await leaveCurrentQuestion(active, req.body, { strokesAlreadySaved: true });
   res.json({ done: false });
 });
 
-// 복습 화면에서 건너뛴 문항을 "포기"로 마감 - 빈 답(오답 처리)으로 채점하고 목록에서 뺀다.
-sessionsRouter.post('/:id/sessions/:sessionId/give-up', async (req, res) => {
-  const examId = Number(req.params.id);
-  const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
-  if (!session) return;
-  const sessionId = session.id;
-
-  if (session.status !== 'in_progress') {
-    return res.status(400).json({ error: '응시 중인 세션이 아닙니다.' });
+// 답을 내지 않고 이동한다(이전 문항, 건너뛰기, 답안 확인 화면에서 문항 고르기).
+sessionsRouter.post('/:id/sessions/:sessionId/navigate', async (req, res) => {
+  const active = await loadActiveSession(req, res);
+  if (!active) return;
+  const { session, exam } = active;
+  const onQuestion = session.current_question_index < exam.questions.length;
+  if (onQuestion && !isCurrentQuestion(exam, session, Number(req.body?.question_id))) {
+    return res.status(409).json({ error: '현재 문항과 일치하지 않습니다.' });
   }
+  await leaveCurrentQuestion(active, req.body);
+  res.json({ done: false });
+});
 
-  const questionId = Number(req.body.question_id);
-  const ok = await repo.giveUpAnswer(sessionId, questionId, now());
-  if (!ok) {
-    return res.status(400).json({ error: '포기할 수 없는 문항입니다.' });
-  }
-
-  const pending = await repo.countPendingAnswers(sessionId);
-  if (pending === 0) {
-    await repo.finalizeSession(sessionId);
-    emitExamMonitorUpdate(examId);
-    return res.json({ done: true });
-  }
+// 학생이 답안 확인 화면에서 "최종 제출"을 눌렀다. 답하지 않은 문항은 무응답 오답으로 마감한다.
+sessionsRouter.post('/:id/sessions/:sessionId/final-submit', async (req, res) => {
+  const active = await loadActiveSession(req, res);
+  if (!active) return;
+  const { examId, session } = active;
+  await repo.markUnansweredAsBlank(session.id, examId, now());
+  await repo.finalizeSession(session.id);
   emitExamMonitorUpdate(examId);
-  res.json({ done: false, reviewMode: true, pendingCount: pending });
+  res.json({ done: true });
 });
 
 // 다른 화면으로 이탈(탭 전환, 창 최소화, 전체화면 해제)이 감지되면 그 즉시 강제 제출
@@ -666,22 +697,34 @@ sessionsRouter.post('/:id/review/answer', async (req, res) => {
   if (!question) return res.status(404).json({ error: '문항을 찾을 수 없습니다.' });
 
   let isCorrect = false;
+  let selectedChoiceId = null;
+  let selectedChoiceIds = null;
+  const shortAnswerText = readShortAnswerText(req.body);
+  // 서술형 재풀이는 몇 개의 핵심 내용을 담았는지만 알려준다(어떤 키워드인지는 알려주지 않음).
+  let essayProgress = null;
   if (question.type === 'mc') {
-    const choice = question.choices.find((c) => c.id === Number(req.body?.selected_choice_id));
-    isCorrect = Boolean(choice?.is_correct);
+    ({ selectedChoiceId, selectedChoiceIds, isCorrect } = gradeMultipleChoice(question, req.body));
   } else {
-    const normalize = (s) => s.trim().toLowerCase();
-    const accepted = (question.correct_short_answers ?? []).map(normalize);
-    isCorrect = accepted.includes(normalize(String(req.body?.short_answer_text ?? '')));
+    ({ isCorrect } = gradeShortAnswer(question, shortAnswerText));
+    if (isKeywordQuestion(question)) {
+      const { groups } = gradeKeywordAnswer(question.keyword_rubric, shortAnswerText);
+      essayProgress = { matched: groups.filter((g) => g.matched != null).length, total: groups.length };
+    }
   }
 
   const updated = await repo.saveReviewAnswer(assignment.id, questionId, {
-    selectedChoiceId: Number(req.body?.selected_choice_id) || null,
-    shortAnswerText: String(req.body?.short_answer_text ?? ''),
+    selectedChoiceId,
+    selectedChoiceIds,
+    shortAnswerText,
     isCorrect,
   });
   const answers = await repo.getReviewAnswerSummary(assignment.id);
-  res.json({ is_correct: isCorrect, done: updated.status === 'completed', answered_count: answers.length });
+  res.json({
+    is_correct: isCorrect,
+    done: updated.status === 'completed',
+    answered_count: answers.length,
+    essay_progress: essayProgress,
+  });
 });
 
 // ---- 교사용: 시험 감독(실시간 모니터링) ----
@@ -726,6 +769,7 @@ sessionsRouter.get('/:id/sessions/:sessionId/monitor', requireAuth, async (req, 
     return {
       ...h,
       prompt_image_path: question?.prompt_image_path ?? null,
+      show_prompt_text: Boolean(question?.show_prompt_text),
       choices: question
         ? question.choices.map((c) => ({
             id: c.id,
@@ -735,6 +779,10 @@ sessionsRouter.get('/:id/sessions/:sessionId/monitor', requireAuth, async (req, 
           }))
         : [],
       correct_short_answers: question?.correct_short_answers ?? null,
+      essay: question ? isKeywordQuestion(question) : false,
+      ...(question
+        ? keywordReviewInfo(question, h.short_answer_text, h.graded_by_teacher)
+        : { keyword_groups: null, needs_review: false }),
     };
   });
 
@@ -748,6 +796,7 @@ sessionsRouter.get('/:id/sessions/:sessionId/monitor', requireAuth, async (req, 
         type: q.type,
         prompt: q.prompt,
         prompt_image_path: q.prompt_image_path,
+        show_prompt_text: Boolean(q.show_prompt_text),
         choices: q.choices.map((c) => ({
           id: c.id,
           order_index: c.order_index,
@@ -900,9 +949,91 @@ sessionsRouter.get('/:id/questions/:qid/breakdown', requireAuth, async (req, res
       .map((s) => [s.roll_number, s.max_score ? s.score / s.max_score : 0]),
   );
 
-  const students = attachQuestionStudentInsights(rows, accuracy, ownAccuracyByRoll);
+  const gradingQuestion = { ...question, keyword_rubric: parseKeywordRubric(question.keyword_rubric) };
+  const students = attachQuestionStudentInsights(rows, accuracy, ownAccuracyByRoll).map((row) => ({
+    ...row,
+    needs_review: keywordReviewInfo(gradingQuestion, row.short_answer_text, row.graded_by_teacher).needs_review,
+  }));
 
-  res.json({ avgTimeMs, accuracy, students });
+  res.json({ avgTimeMs, accuracy, points: question.points, students });
+});
+
+// 서술형 이의 제기 처리: 학생이 쓴 표현을 채점 기준의 한 줄(핵심 내용)에 동의어로 추가하고,
+// 이 문항의 모든 자동 채점 답안을 새 기준으로 다시 채점한다(같은 표현을 쓴 다른 학생도 함께
+// 인정되도록). apply가 false면 점수가 바뀌는 학생 목록만 미리 돌려준다.
+sessionsRouter.post('/:id/questions/:qid/keyword-expression', requireAuth, async (req, res) => {
+  const examId = Number(req.params.id);
+  const qid = Number(req.params.qid);
+  const exam = await repo.getExamFull(examId);
+  const question = exam?.questions.find((q) => q.id === qid);
+  if (!question) return res.status(404).json({ error: '문항을 찾을 수 없습니다.' });
+  if (!isKeywordQuestion(question)) return res.status(400).json({ error: '서술형 문항이 아닙니다.' });
+
+  const groupIndex = Number(req.body?.group_index);
+  const expression = typeof req.body?.expression === 'string' ? req.body.expression.trim().slice(0, 100) : '';
+  if (!Number.isInteger(groupIndex) || !question.keyword_rubric[groupIndex]) {
+    return res.status(400).json({ error: '핵심 내용을 찾을 수 없습니다.' });
+  }
+  if (!expression) return res.status(400).json({ error: '인정할 표현을 입력해주세요.' });
+
+  const rubric = question.keyword_rubric.map((group, i) =>
+    i === groupIndex && !group.keywords.includes(expression)
+      ? { ...group, keywords: [...group.keywords, expression] }
+      : group,
+  );
+  const regraded = { ...question, keyword_rubric: rubric };
+  const changes = [];
+  for (const answer of await repo.listAutoGradedAnswers(qid)) {
+    const graded = gradeShortAnswer(regraded, answer.short_answer_text ?? '');
+    if (graded.awardedPoints === answer.awarded_points && Number(graded.isCorrect) === answer.is_correct) continue;
+    changes.push({
+      session_id: answer.session_id,
+      roll_number: answer.roll_number,
+      name: answer.name,
+      before: answer.awarded_points ?? 0,
+      after: graded.awardedPoints,
+      is_correct: graded.isCorrect,
+    });
+  }
+
+  const apply = req.body?.apply === true;
+  if (apply) {
+    await repo.setKeywordGrading(qid, 'keyword', rubric);
+    for (const change of changes) {
+      await repo.applyAutoRegrade(change.session_id, qid, change.after, change.is_correct);
+    }
+    emitExamMonitorUpdate(examId);
+  }
+  res.json({ applied: apply, points: question.points, changes });
+});
+
+// 교사가 끝난 시험의 단답형/서술형 답안 점수를 직접 고친다(키워드 자동 채점이 틀렸을 때 등).
+// 만점이면 정답으로 바뀌어 정답률·성취기준 통계에도 반영되고, 총점도 다시 계산한다.
+sessionsRouter.put('/:id/sessions/:sessionId/answers/:questionId/grade', requireAuth, async (req, res) => {
+  const examId = Number(req.params.id);
+  const sessionId = Number(req.params.sessionId);
+  const questionId = Number(req.params.questionId);
+  const session = await getSessionOr404(examId, sessionId, res);
+  if (!session) return;
+  if (session.status !== 'submitted' && session.status !== 'force_submitted') {
+    return res.status(400).json({ error: '시험을 마친 답안만 점수를 고칠 수 있습니다.' });
+  }
+  const question = await repo.getQuestion(examId, questionId);
+  if (!question) return res.status(404).json({ error: '문항을 찾을 수 없습니다.' });
+  if (question.type !== 'short') {
+    return res.status(400).json({ error: '단답형·서술형 문항만 점수를 고칠 수 있습니다.' });
+  }
+  const answer = await repo.getAnswer(sessionId, questionId);
+  if (!answer?.answered_at) return res.status(400).json({ error: '학생이 답하지 않은 문항입니다.' });
+
+  const awardedPoints = Number(req.body?.awarded_points);
+  if (!Number.isFinite(awardedPoints) || awardedPoints < 0 || awardedPoints > question.points) {
+    return res.status(400).json({ error: `점수는 0~${question.points}점 사이로 입력해주세요.` });
+  }
+  const rounded = Math.round(awardedPoints * 100) / 100;
+  await repo.setAnswerGradeByTeacher(sessionId, questionId, rounded, rounded >= question.points);
+  const updated = await repo.getSession(sessionId);
+  res.json({ ok: true, score: updated.score, max_score: updated.max_score });
 });
 
 // SessionReview(학생 한 명 × 시험 한 번 상세 복습 화면)에서 "빠르게 풀고 틀림"/"오래
