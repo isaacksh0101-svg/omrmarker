@@ -176,6 +176,20 @@ export function TakeExam() {
     return s;
   }, [id, sessionId]);
 
+  // 최종 제출 - 답안 확인 화면의 "정말 제출하기"에서도 쓰고, 안 푼 문제 없이 마지막
+  // 문항까지 다 풀었을 때 확인 화면을 건너뛰고 바로 여기로도 온다.
+  const finalSubmit = useCallback(async () => {
+    setSubmitting(true);
+    try {
+      await api.post(`/exams/${id}/sessions/${sessionId}/final-submit`);
+    } catch {
+      // 이미 시간 초과 등으로 끝났을 수 있다 - 아래에서 최신 상태를 불러온다.
+    }
+    await reloadSession();
+    setCurrent(null);
+    setSubmitting(false);
+  }, [id, sessionId, reloadSession]);
+
   // 지금 위치(문항 또는 답안 확인 화면)를 불러온다. 이미 답했거나 필기해 둔 문항이면 그 답을
   // 입력칸에 되살린다(필기는 아래 effect에서 캔버스에 다시 그린다).
   const loadCurrentQuestion = useCallback(async () => {
@@ -185,11 +199,18 @@ export function TakeExam() {
       setCurrent(null);
       return;
     }
+    // 답안 확인 화면인데 빠진 문항이 하나도 없으면, 확인 화면을 보여주지 않고 그대로
+    // 제출한다 - 이 화면은 "안 푼 문제가 있으니 확인해라"는 경고용이라, 다 풀었을 때는
+    // 굳이 한 번 더 거칠 필요가 없다.
+    if (c.summary && (c.answered ?? []).every(Boolean)) {
+      await finalSubmit();
+      return;
+    }
     setCurrent(c);
     setConfirmingSubmit(false);
     setSelectedChoices(c.my_answer?.selected_choice_ids ?? []);
     setShortAnswer(c.my_answer?.short_answer_text ?? '');
-  }, [id, sessionId, reloadSession]);
+  }, [id, sessionId, reloadSession, finalSubmit]);
 
   useEffect(() => {
     // 같은 /student/exam/:examId 라우트 안에서 다른 시험으로 이동하면 React가 이
@@ -388,18 +409,6 @@ export function TakeExam() {
     } finally {
       setSubmitting(false);
     }
-  }
-
-  async function finalSubmit() {
-    setSubmitting(true);
-    try {
-      await api.post(`/exams/${id}/sessions/${sessionId}/final-submit`);
-    } catch {
-      // 이미 시간 초과 등으로 끝났을 수 있다 - 아래에서 최신 상태를 불러온다.
-    }
-    await reloadSession();
-    setCurrent(null);
-    setSubmitting(false);
   }
 
   if (!session || !exam) {

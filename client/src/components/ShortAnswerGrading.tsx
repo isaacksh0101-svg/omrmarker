@@ -195,7 +195,7 @@ export function ShortAnswerGrading({ examId, sessionId, item, editable, onSaved 
                       setAcceptGroup(i);
                     }}
                   >
-                    이 표현 인정
+                    키워드 추가
                   </button>
                 )}
               </div>
