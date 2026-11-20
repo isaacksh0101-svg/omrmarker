@@ -39,4 +39,8 @@ export const config = {
   // visibilitychange/fullscreenchange가 같은 탭 전환 한 번에 겹쳐 뜰 때 로그만 중복
   // 남지 않게 묶어주는 디바운스 창이다.
   anticheatDebounceMs: Number(process.env.ANTICHEAT_DEBOUNCE_MS) || 2000,
+  // 기록만 남기고 봐주는 짧은 이탈(잠깐 포커스를 잃었다 돌아옴, 전체화면만 풀림)의 허용 횟수.
+  // 이 횟수까지는 봐주고 그 다음 번부터는 진짜 이탈처럼 강제 종료한다 - 3초 유예 안에 AI 창과
+  // 왔다 갔다 하며 답을 찾는 걸 막기 위함. 되살리기를 하면 다시 처음부터 센다.
+  anticheatSoftLeaveLimit: Number(process.env.ANTICHEAT_SOFT_LEAVE_LIMIT) || 3,
 };

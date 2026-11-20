@@ -61,6 +61,13 @@ CREATE TABLE IF NOT EXISTS questions (
   -- 답안에 들어 있는 만큼 부분 점수를 준다. 모든 그룹을 맞혀야 정답(is_correct=1)이다.
   grading_mode TEXT NOT NULL DEFAULT 'exact',
   keyword_rubric TEXT,
+  -- 1이면 문제 오류로 전원 정답 처리한 문항이다. 무엇을 답했든(답하지 않았어도) 만점이다.
+  full_credit INTEGER NOT NULL DEFAULT 0,
+  -- 1이면 "교사 직접 채점" 문항이다(단답형·서술형). 인정 답안과 다른 답은 바로 오답으로 확정하지 않고
+  -- 교사가 학생 답을 보고 정답/오답을 정할 때까지 "확인 대기"로 둔다.
+  open_answer INTEGER NOT NULL DEFAULT 0,
+  -- 위 문항에서 교사가 오답으로 확정한 답(정규화한 문자열 JSON 배열).
+  rejected_short_answers TEXT,
   ai_suggested INTEGER NOT NULL DEFAULT 0,
   -- AI가 이 문항에 제안한 성취기준 후보 전체(2~3개, confidence/rationale 포함)를 JSON
   -- 배열로 담아둔다. 실제로 태그된 성취기준(question_standards)은 그중 1순위만 자동
@@ -115,6 +122,8 @@ CREATE TABLE IF NOT EXISTS exam_sessions (
   score REAL,
   max_score REAL,
   current_question_index INTEGER NOT NULL DEFAULT 0,
+  -- 교사가 출력한 개인 결과지에 학생 확인 서명을 받았다고 체크한 시각(NULL이면 아직).
+  result_signed_at TEXT,
   -- 같은 번호로 이미 참여/응시 중인 세션에 다른 기기가 또 참여하려 하면 기본적으로
   -- 막는다(둘이 동시에 같은 세션을 건드리면 답 제출/이탈 경고가 뒤섞인다). 원래 쓰던
   -- 기기가 고장나서 다른 기기로 이어가야 하는 등 정당한 상황엔, 교사가 "실시간 감독"에서
@@ -153,6 +162,8 @@ CREATE TABLE IF NOT EXISTS answers (
   awarded_points REAL,
   -- 교사가 결과 화면에서 점수를 직접 고쳤으면 1. 자동 채점 결과가 아니라는 표시다.
   graded_by_teacher INTEGER NOT NULL DEFAULT 0,
+  -- 1이면 "교사 직접 채점" 문항에서 교사가 정답/오답을 아직 확인하지 않은 답이다(지금은 0점).
+  confirm_pending INTEGER NOT NULL DEFAULT 0,
   -- 이 문항을 풀 때 남긴 필기(S-Pen/손가락) 원본 - 획 좌표 배열을 JSON으로 그대로 저장한다.
   -- 답만으론 안 보이는 풀이 과정(시도했는지, 어디서 막혔는지)을 나중에 리포트에서 다시
   -- 그려볼 수 있게 하기 위함. 필기가 없으면 NULL.
@@ -196,6 +207,20 @@ CREATE TABLE IF NOT EXISTS review_answers (
   attempts INTEGER NOT NULL DEFAULT 1,
   UNIQUE(assignment_id, question_id)
 );
+
+-- 학생이 오답 재풀이 중에 낸 단답형·서술형 채점 이의 제기. 문항당 한 번만 낼 수 있다.
+-- 교사가 점수를 고치든 안 고치든 받아들임(accepted)/기각(rejected)으로 처리를 마무리한다.
+CREATE TABLE IF NOT EXISTS answer_appeals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES exam_sessions(id) ON DELETE CASCADE,
+  question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','rejected')),
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  UNIQUE(session_id, question_id)
+);
+CREATE INDEX IF NOT EXISTS idx_appeals_session ON answer_appeals(session_id);
 
 CREATE TABLE IF NOT EXISTS warning_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -65,6 +65,9 @@ if (!sessionColumns.includes('disqualify_reason')) {
 if (!sessionColumns.includes('access_token')) {
   db.exec('ALTER TABLE exam_sessions ADD COLUMN access_token TEXT');
 }
+if (!sessionColumns.includes('result_signed_at')) {
+  db.exec('ALTER TABLE exam_sessions ADD COLUMN result_signed_at TEXT');
+}
 db.exec(
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_access_token ON exam_sessions(access_token) WHERE access_token IS NOT NULL',
 );
@@ -91,6 +94,15 @@ if (!questionColumns.includes('grading_mode')) {
 if (!questionColumns.includes('keyword_rubric')) {
   db.exec('ALTER TABLE questions ADD COLUMN keyword_rubric TEXT');
 }
+if (!questionColumns.includes('full_credit')) {
+  db.exec('ALTER TABLE questions ADD COLUMN full_credit INTEGER NOT NULL DEFAULT 0');
+}
+if (!questionColumns.includes('open_answer')) {
+  db.exec('ALTER TABLE questions ADD COLUMN open_answer INTEGER NOT NULL DEFAULT 0');
+}
+if (!questionColumns.includes('rejected_short_answers')) {
+  db.exec('ALTER TABLE questions ADD COLUMN rejected_short_answers TEXT');
+}
 
 const answerColumns = db.prepare('PRAGMA table_info(answers)').all().map((c) => c.name);
 if (!answerColumns.includes('strokes_json')) {
@@ -113,6 +125,9 @@ if (!answerColumns.includes('visit_count')) {
 if (!answerColumns.includes('first_is_correct')) {
   db.exec('ALTER TABLE answers ADD COLUMN first_is_correct INTEGER');
   db.exec('UPDATE answers SET first_is_correct = is_correct WHERE answered_at IS NOT NULL');
+}
+if (!answerColumns.includes('confirm_pending')) {
+  db.exec('ALTER TABLE answers ADD COLUMN confirm_pending INTEGER NOT NULL DEFAULT 0');
 }
 
 const reviewAssignmentColumns = db.prepare('PRAGMA table_info(review_assignments)').all().map((c) => c.name);

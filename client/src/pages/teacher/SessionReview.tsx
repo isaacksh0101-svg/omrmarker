@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api } from '../../api/client';
+import { ApiError, api } from '../../api/client';
 import type { Exam, ExamResultsData, SessionMonitorDetail, SessionQuestionOutlier } from '../../types';
 import type { StrokesPayload } from '../../lib/strokes';
 import { Card } from '../../components/Card';
@@ -9,6 +9,7 @@ import { Button } from '../../components/Button';
 import { MathText } from '../../components/MathText';
 import { StrokesReplay } from '../../components/StrokesReplay';
 import { ShortAnswerGrading } from '../../components/ShortAnswerGrading';
+import { AppealReview } from '../../components/AppealReview';
 import { statusMeta } from '../../lib/sessionStatus';
 
 function formatMs(ms: number | null) {
@@ -59,6 +60,33 @@ export function SessionReview() {
     api.get<ExamResultsData>(`/exams/${examId}/results`).then(setResultsData);
   }
 
+  // 테스트 응시처럼 남길 필요 없는 응시 기록 한 건만 지운다. 같은 학생의 다른 시험 기록은
+  // 그대로 남는다(학생의 모든 기록을 지우는 것은 학생 명단 화면의 "학습 데이터 삭제").
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  async function removeSession() {
+    if (!detail) return;
+    const who = `${detail.student?.roll_number}번${detail.student?.name ? ` ${detail.student.name}` : ''}`;
+    const inProgress = detail.session.status === 'joined' || detail.session.status === 'in_progress';
+    const warning = inProgress ? '\n\n이 학생은 아직 응시 중입니다. 삭제하면 학생 화면의 시험이 중단됩니다.' : '';
+    if (
+      !confirm(
+        `${who}의 이 시험 응시 기록을 완전 삭제할까요?\n\n답안, 점수, 필기, 화면 이탈 기록, 오답 재풀이 과제가 삭제되며 되돌릴 수 없습니다. 이 학생의 다른 시험 기록은 유지되고, 이 시험은 다시 응시할 수 있습니다.${warning}`,
+      )
+    )
+      return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await api.delete(`/exams/${examId}/sessions/${sid}`);
+      window.dispatchEvent(new Event('scorelab:data-retention-changed'));
+      navigate(`/exams/${examId}/results`, { replace: true });
+    } catch (e) {
+      setDeleteError(e instanceof ApiError ? e.message : '응시 기록 삭제 중 오류가 발생했습니다.');
+      setDeleting(false);
+    }
+  }
+
   // 이전/다음 학생 이동을 위해 이 시험의 전체 세션 목록(번호 순)을 한 번 불러온다.
   useEffect(() => {
     api.get<ExamResultsData>(`/exams/${examId}/results`).then(setResultsData);
@@ -94,8 +122,9 @@ export function SessionReview() {
           </div>
           {exam && <p className="mt-1 truncate text-sm text-ink-soft">{exam.title}</p>}
         </div>
-        {orderedSessions.length > 1 && (
-          <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {orderedSessions.length > 1 && (
+            <>
             <Button
               variant="secondary"
               size="sm"
@@ -112,9 +141,14 @@ export function SessionReview() {
             >
               다음 학생 →
             </Button>
-          </div>
-        )}
+            </>
+          )}
+          <Button variant="danger" size="sm" disabled={deleting} onClick={removeSession}>
+            {deleting ? '삭제 중...' : '응시 기록 삭제'}
+          </Button>
+        </div>
       </div>
+      {deleteError && <p className="mt-2 text-right text-xs text-danger">{deleteError}</p>}
 
       {(detail.session.status === 'submitted' || detail.session.status === 'force_submitted') && (
         <Card className="animate-fade-in-up mt-5">
@@ -122,6 +156,12 @@ export function SessionReview() {
           <p className="mt-1 text-lg font-bold text-ink">
             {detail.session.score ?? 0} / {detail.session.max_score ?? 0}
           </p>
+          {detail.history.some((h) => h.appeal?.status === 'pending') && (
+            <p className="mt-1 text-xs font-bold text-warn">
+              처리하지 않은 이의 제기가 {detail.history.filter((h) => h.appeal?.status === 'pending').length}건
+              있어요 - 아래 문항에서 확인해주세요.
+            </p>
+          )}
         </Card>
       )}
 
@@ -253,6 +293,9 @@ export function SessionReview() {
                         editable={finished}
                         onSaved={reloadAfterGrade}
                       />
+                    )}
+                    {h.appeal && (
+                      <AppealReview examId={examId} sessionId={sid} appeal={h.appeal} item={h} onChanged={reloadAfterGrade} />
                     )}
 
                     <div className="mt-2 flex items-center gap-3 text-[11px] text-ink-soft">

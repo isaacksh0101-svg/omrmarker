@@ -9,6 +9,7 @@ import { config } from './config.js';
 import { getLanIp, getLanIpCandidates, isAddressInSubnet } from './lib/lanIp.js';
 import { getStudentNetworkAddress } from './services/appSettings.js';
 import { setIO, monitorRoom, emitExamMonitorUpdate } from './lib/realtime.js';
+import { scheduleMathLedgerExport } from './services/mathStandardsLedger.js';
 import './db/index.js'; // DB 연결 + 스키마 초기화 (부작용으로 초기화됨)
 import * as repo from './db/repo.js';
 import { examsRouter } from './routes/exams.js';
@@ -25,7 +26,10 @@ import { requireTrustedBrowserRequest, trustedBrowserRequest } from './middlewar
 const app = express();
 app.disable('x-powered-by');
 app.use(requireTrustedBrowserRequest);
-app.use(express.json());
+// 필기(strokes)가 "다음" 요청에 함께 실려 와서 기본 한도(100KB)로는 수학 풀이처럼 필기가
+// 많은 문항에서 요청이 거절됐다(같은 문제가 다시 뜨고 필기·답이 사라짐). 필기 상한(점 4만 개,
+// sessions.js의 readStrokesJson)이 약 2.4MB라 그보다 넉넉하게 연다.
+app.use(express.json({ limit: '10mb' }));
 
 function normalizedRemoteAddress(req) {
   const address = req.socket?.remoteAddress || req.connection?.remoteAddress || '';
@@ -37,7 +41,6 @@ function studentNetworkAccess(req) {
   const selectedAddress = getStudentNetworkAddress();
   const selected = getLanIpCandidates().find((candidate) => candidate.address === selectedAddress);
   if (!selected) return { allowed: false, error: '교사가 학생 접속용 네트워크를 아직 선택하지 않았습니다.' };
-  if (selected.networkCategory === 'Public') return { allowed: false, error: '공용 네트워크에서는 ScoreLab 학생 접속이 차단됩니다.' };
   if (!isAddressInSubnet(normalizedRemoteAddress(req), selected.address, selected.netmask)) {
     return { allowed: false, error: '허용된 학교 내부 네트워크에서만 접속할 수 있습니다.' };
   }
@@ -45,8 +48,8 @@ function studentNetworkAccess(req) {
 }
 
 // 학생용 서버는 교사가 환경설정에서 명시적으로 선택한 네트워크 하나에만 연다.
-// localhost 교사 화면은 항상 허용하고, LAN 요청은 선택한 어댑터와 같은 서브넷이면서
-// Windows 공용(Public) 네트워크가 아닐 때만 통과시킨다.
+// localhost 교사 화면은 항상 허용하고, LAN 요청은 선택한 어댑터와 같은 서브넷일 때만
+// 통과시킨다(Windows 네트워크 프로필이 공용(Public)이어도 허용).
 app.use((req, res, next) => {
   const access = studentNetworkAccess(req);
   if (access.allowed) return next();
@@ -98,7 +101,7 @@ app.get('/api/lan-info', requireAuth, async (_req, res) => {
   // /student 같은 화면 경로는 서빙하지 않는다. QR은 그대로 보여주되 화면에서 경고해야 한다.
   const servingClient = fs.existsSync(config.clientDistDir);
   const qr = await QRCode.toDataURL(studentUrl).catch(() => null);
-  res.json({ url, studentUrl, qr, servingClient, candidates, selectedIp: ip, selected, accessReady: Boolean(selected) && selected.networkCategory !== 'Public' });
+  res.json({ url, studentUrl, qr, servingClient, candidates, selectedIp: ip, selected, accessReady: Boolean(selected) });
 });
 
 // SPA의 교사 화면 URL도 LAN에서 직접 열리지 않게 막는다. 정적 JS/CSS는 학생 화면과
@@ -200,4 +203,6 @@ httpServer.listen(config.port, '0.0.0.0', () => {
   console.log(`ScoreLab 서버 실행 중`);
   console.log(`  로컬:    http://localhost:${config.port}`);
   console.log(`  학생 접속용(같은 Wi-Fi): http://${ip}:${config.port}`);
+  // 켤 때 한 번 수학 누적 성적 엑셀을 최신 기록으로 맞춰 둔다(백업 복원 뒤 재시작 등).
+  scheduleMathLedgerExport(null);
 });

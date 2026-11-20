@@ -8,6 +8,7 @@ server/data/uploads/*
 server/data/settings.json
 server/data/.settings.key
 server/data/logs/
+server/data/ScoreLab결과/
 .env
 .env.local
 server/firebase-service-account.json

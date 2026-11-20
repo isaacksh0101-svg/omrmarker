@@ -55,6 +55,12 @@ export interface Question {
   // 단답형 채점 방식 - 'keyword'면 서술형으로 keyword_rubric의 키워드 그룹 포함 비율만큼 부분 점수.
   grading_mode: GradingMode;
   keyword_rubric: KeywordGroup[];
+  // 문제 오류로 전원 정답 처리한 문항 - 무엇을 답했든 만점.
+  full_credit: boolean;
+  // 선생님이 직접 채점하는 단답형·서술형 - 단답형은 인정 답안과 다른 답, 서술형은 쓴 답 전부가 교사가 확인할 때까지 "확인 대기".
+  open_answer: boolean;
+  // 위 문항에서 교사가 오답으로 확정한 답(정규화된 문자열).
+  rejected_short_answers: string[];
   ai_suggested: boolean;
   // AI가 제안한 성취기준 후보 전체(관련도 순, 1순위는 이미 standards에 자동 태그됨) - 교사가
   // AI 판단을 검토할 때 참고용. AI로 만들어지지 않은 문항은 null.
@@ -121,7 +127,7 @@ export interface ExamSession {
   max_score: number | null;
   current_question_index: number;
   disqualify_reason: string | null;
-  answers?: { order_index: number; is_correct: number; awarded_points: number }[];
+  answers?: SessionAnswerSummary[];
 }
 
 export interface PublicExam {
@@ -182,6 +188,8 @@ export interface ReviewQuestionsResponse {
   };
   questions: PublicQuestion[];
   answers: { question_id: number; order_index: number; is_correct: number }[];
+  // 재풀이 문항 중 이의 제기를 낼 수 있는 단답형·서술형(시험 때 쓴 답과 받은 점수, 정답 없음)
+  appeal_targets: SessionAnswerSummary[];
 }
 
 export interface RosterEntry {
@@ -249,6 +257,35 @@ export interface StandardWeaknessPattern {
   recentGapsPct: number[] | null;
 }
 
+export type AppealStatus = 'pending' | 'accepted' | 'rejected';
+
+// 학생 결과 화면의 문항별 요약. 정답은 담기지 않는다 - 단답형·서술형만 학생 자신이 쓴 답과
+// 이의 제기 상태가 함께 온다.
+export interface SessionAnswerSummary {
+  question_id: number;
+  order_index: number;
+  type: QuestionType;
+  grading_mode: GradingMode;
+  points: number;
+  is_correct: number;
+  awarded_points: number | null;
+  answered: number;
+  short_answer_text: string | null;
+  appeal_status: AppealStatus | null;
+  // 1이면 "교사 직접 채점" 단답형에서 선생님이 정답/오답을 아직 확인하지 않은 답(지금은 0점).
+  confirm_pending: number;
+}
+
+export interface AnswerAppeal {
+  id: number;
+  session_id: number;
+  question_id: number;
+  reason: string;
+  status: AppealStatus;
+  created_at: string;
+  resolved_at: string | null;
+}
+
 export interface QuestionStudentAnswer {
   session_id: number;
   roll_number: number;
@@ -256,6 +293,8 @@ export interface QuestionStudentAnswer {
   is_correct: number;
   awarded_points: number | null;
   graded_by_teacher: boolean;
+  // 1이면 "교사 직접 채점" 문항에서 교사 확인을 기다리는 답.
+  confirm_pending: number;
   // 서술형에서 부분 점수이거나 부정 표현이 섞여 교사가 한 번 봐야 하는 답안.
   needs_review: boolean;
   time_spent_ms: number | null;
@@ -280,6 +319,19 @@ export interface QuestionBreakdown {
   accuracy: number | null;
   points: number;
   students: QuestionStudentAnswer[];
+  // 단답형(서술형 제외)에서 학생들이 쓴 오답을 같은 답끼리 묶은 것(많은 순). 그 외 문항은 null.
+  wrong_answer_groups: { text: string; count: number }[] | null;
+}
+
+// 문항 정정 미리보기·적용 결과에서 점수가 바뀌는 학생 한 명.
+export interface RegradeChange {
+  session_id: number;
+  roll_number: number;
+  name: string | null;
+  status?: SessionStatus;
+  before: number;
+  after: number;
+  is_correct: boolean;
 }
 
 export interface ExamResultSession {
@@ -297,6 +349,12 @@ export interface ExamResultSession {
   review_answered: number;
   review_correct: number;
   review_max_attempts: number | null;
+  // 아직 처리하지 않은 이의 제기 수.
+  pending_appeals: number;
+  // "교사 직접 채점" 문항에서 교사 확인을 기다리는 답 수.
+  pending_confirms: number;
+  // 출력한 결과지에 학생 확인 서명을 받았다고 체크한 시각.
+  result_signed_at: string | null;
   isOutlier: boolean;
   outlierReasons: string[];
 }
@@ -307,6 +365,18 @@ export interface ExamResultsData {
   slowestQuestions: QuestionStat[];
   lowestAccuracyQuestions: QuestionStat[];
   standardsAccuracy: StandardAccuracy[];
+  studentStandardsAccuracy: StudentStandardAccuracy[];
+}
+
+// 한 시험에서 학생 1명 × 성취기준 1개의 정답률(결과 엑셀 "학생별 성취기준" 시트).
+export interface StudentStandardAccuracy {
+  roll_number: number;
+  code: string;
+  statement: string;
+  subject_name: string;
+  attempted_count: number;
+  correct_count: number;
+  accuracy: number;
 }
 
 export interface MonitorStudent {
@@ -368,6 +438,7 @@ export interface MonitorHistoryItem {
   prompt_image_path: string | null;
   choices: { id: number; order_index: number; text: string; is_correct: boolean }[];
   correct_short_answers: string[] | null;
+  appeal: AnswerAppeal | null;
   multi_select: boolean;
   selected_choice_id: number | null;
   selected_choice_ids: number[];

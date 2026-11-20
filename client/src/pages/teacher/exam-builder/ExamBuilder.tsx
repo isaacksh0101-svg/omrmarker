@@ -28,6 +28,74 @@ export function ExamBuilder() {
   const [finalizing, setFinalizing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // 시험지 이름 바꾸기 - 확정된 시험도 가능하다(이름은 응시 기록·채점에 영향이 없다).
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [savingTitle, setSavingTitle] = useState(false);
+  const [titleError, setTitleError] = useState<string | null>(null);
+
+  async function saveTitle() {
+    const title = titleDraft.trim();
+    if (!exam || !title || title === exam.title) {
+      setEditingTitle(false);
+      return;
+    }
+    setSavingTitle(true);
+    setTitleError(null);
+    try {
+      setExam(await api.put<Exam>(`/exams/${id}`, { title }));
+      setEditingTitle(false);
+    } catch (e) {
+      setTitleError(e instanceof ApiError ? e.message : '이름 변경 중 오류가 발생했습니다.');
+    } finally {
+      setSavingTitle(false);
+    }
+  }
+
+  // 온라인 응시 ↔ 종이 시험지+마킹 모드 변환. 한 번 누르면 안내를 보여주고, 한 번 더 눌러야
+  // 바뀐다. 학생이 참여한 시험이면 서버가 막는다.
+  const [confirmingMode, setConfirmingMode] = useState(false);
+  const [changingMode, setChangingMode] = useState(false);
+  const [modeMessage, setModeMessage] = useState<{ tone: 'error' | 'info'; text: string } | null>(null);
+
+  async function changeMode() {
+    if (!exam) return;
+    const next = exam.mode === 'online' ? 'paper_marking' : 'online';
+    setChangingMode(true);
+    setModeMessage(null);
+    try {
+      const updated = await api.put<Exam & { mode_change?: { empty_prompts: number; back_to_draft: boolean } }>(
+        `/exams/${id}/mode`,
+        { mode: next },
+      );
+      setExam(updated);
+      setMissing(null);
+      setTab('build');
+      const info = updated.mode_change;
+      if (next === 'online' && info && info.empty_prompts > 0) {
+        setModeMessage({
+          tone: 'info',
+          text: `온라인 응시로 바꿨어요. 문제 내용이 비어 있는 문항이 ${info.empty_prompts}개 있어요 - 문제를 입력하거나 AI로 불러온 뒤${
+            info.back_to_draft ? ' 다시 확정해주세요(작성 중으로 되돌렸어요).' : ' 확정해주세요.'
+          }`,
+        });
+      } else {
+        setModeMessage({
+          tone: 'info',
+          text:
+            next === 'online'
+              ? '온라인 응시로 바꿨어요. 학생 화면에 문제와 보기가 보여요.'
+              : '종이 시험지 + 마킹으로 바꿨어요. 문제 내용은 그대로 남아 있고 학생 화면에만 안 보여요.',
+        });
+      }
+    } catch (e) {
+      setModeMessage({ tone: 'error', text: e instanceof ApiError ? e.message : '모드 변경 중 오류가 발생했습니다.' });
+    } finally {
+      setChangingMode(false);
+      setConfirmingMode(false);
+    }
+  }
+
   const reload = useCallback(() => {
     api.get<Exam>(`/exams/${id}`).then(setExam);
   }, [id]);
@@ -85,12 +153,75 @@ export function ExamBuilder() {
       >
         ← 시험지 관리
       </button>
-      <div className="animate-fade-in-up mt-3 flex items-center gap-2">
-        <h1 className="text-2xl font-bold tracking-tight text-ink">{exam.title}</h1>
+      <div className="animate-fade-in-up mt-3 flex flex-wrap items-center gap-2">
+        {editingTitle ? (
+          <form
+            className="flex min-w-0 flex-1 items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              saveTitle();
+            }}
+          >
+            <input
+              autoFocus
+              maxLength={100}
+              value={titleDraft}
+              disabled={savingTitle}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onKeyDown={(e) => e.key === 'Escape' && setEditingTitle(false)}
+              className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-3 py-1.5 text-lg font-bold text-ink outline-none focus:border-accent"
+            />
+            <Button type="submit" size="sm" disabled={savingTitle || !titleDraft.trim()}>
+              {savingTitle ? '저장 중...' : '저장'}
+            </Button>
+            <Button type="button" variant="secondary" size="sm" disabled={savingTitle} onClick={() => setEditingTitle(false)}>
+              취소
+            </Button>
+          </form>
+        ) : (
+          <>
+            <h1 className="text-2xl font-bold tracking-tight text-ink">{exam.title}</h1>
+            <button
+              className="text-xs font-bold text-ink-soft hover:text-accent"
+              onClick={() => {
+                setTitleDraft(exam.title);
+                setTitleError(null);
+                setEditingTitle(true);
+              }}
+            >
+              이름 바꾸기
+            </button>
+          </>
+        )}
         <Badge tone={exam.status === 'finalized' ? 'good' : 'neutral'}>
           {exam.status === 'finalized' ? '확정됨' : '작성 중'}
         </Badge>
         <Badge tone="neutral">{exam.mode === 'paper_marking' ? '종이 시험지 + 마킹' : '온라인 응시'}</Badge>
+        {exam.status !== 'archived' &&
+          (confirmingMode ? (
+            <span className="flex items-center gap-1.5">
+              <Button size="sm" disabled={changingMode} onClick={changeMode}>
+                {changingMode
+                  ? '바꾸는 중...'
+                  : exam.mode === 'online'
+                    ? '종이 시험지로 바꾸기'
+                    : '온라인 응시로 바꾸기'}
+              </Button>
+              <Button size="sm" variant="secondary" disabled={changingMode} onClick={() => setConfirmingMode(false)}>
+                취소
+              </Button>
+            </span>
+          ) : (
+            <button
+              className="text-xs font-bold text-ink-soft hover:text-accent"
+              onClick={() => {
+                setModeMessage(null);
+                setConfirmingMode(true);
+              }}
+            >
+              모드 바꾸기
+            </button>
+          ))}
         {exam.status === 'finalized' && (
           <button
             className="ml-auto text-xs font-bold text-accent hover:underline"
@@ -100,6 +231,20 @@ export function ExamBuilder() {
           </button>
         )}
       </div>
+      {titleError && <p className="mt-1 text-xs font-bold text-danger">{titleError}</p>}
+      {confirmingMode && (
+        <p className="mt-1 text-xs text-ink-soft">
+          {exam.mode === 'online'
+            ? '종이 시험지 모드에서는 학생 화면에 문제 없이 답 번호만 보여요. 입력한 문제 내용은 지워지지 않아서 다시 온라인으로 돌릴 수 있어요.'
+            : '온라인 모드에서는 학생 화면에 문제와 보기를 보여줘요. 틀만 만든 문항은 문제 내용이 비어 있으니 바꾼 뒤 채워야 해요.'}{' '}
+          학생이 이미 참여한 시험은 바꿀 수 없어요.
+        </p>
+      )}
+      {modeMessage && (
+        <p className={`mt-1 text-xs font-bold ${modeMessage.tone === 'error' ? 'text-danger' : 'text-accent'}`}>
+          {modeMessage.text}
+        </p>
+      )}
       <p className="mt-1 text-sm text-ink-soft">
         {GRADE_LABEL[exam.grade_cluster] || exam.grade_cluster} · {exam.subject_id} ·{' '}
         {Math.round(exam.time_limit_sec / 60)}분

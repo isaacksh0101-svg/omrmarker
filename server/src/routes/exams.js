@@ -9,8 +9,24 @@ import { upload } from '../middleware/upload.js';
 import { getStandardByCode } from '../services/curriculumStandards.js';
 import { sanitizeKeywordRubric } from '../services/keywordGrading.js';
 import { requireAuth } from '../middleware/auth.js';
+import { emitExamMonitorUpdate } from '../lib/realtime.js';
+import { applyRegrade, computeRegrade } from '../services/grading.js';
 
 export const examsRouter = Router();
+
+// 시험지 편집에서 정답(보기 정답·단답형 정답·서술형 기준)을 고치면, 이미 응시한 학생이 있을 때
+// 그 답안을 고친 정답으로 바로 다시 채점한다(응시 중인 학생 포함). 이렇게 해야 답을 언제 냈는지에
+// 따라 같은 답의 점수가 갈리지 않는다. 교사가 직접 고친 점수는 건드리지 않는다.
+async function regradeAfterAnswerKeyChange(examId, qid) {
+  const full = await repo.getExamFull(examId);
+  const question = full.questions.find((q) => q.id === qid);
+  const changes = await computeRegrade(question);
+  if (changes.length > 0) {
+    await applyRegrade(question, changes);
+    emitExamMonitorUpdate(examId);
+  }
+  return { ...question, regraded_count: changes.length };
+}
 
 export async function getExamRow(id) {
   return repo.getExam(id);
@@ -86,14 +102,48 @@ examsRouter.put('/:id', requireAuth, async (req, res) => {
   const exam = await repo.getExam(id);
   if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
 
-  const title = req.body.title ?? exam.title;
+  // 제목은 확정된 시험에서도 바꿀 수 있다(응시 기록·채점과 무관한 표시용 값). 빈 제목만 막는다.
+  const title = req.body.title === undefined ? exam.title : String(req.body.title).trim().slice(0, 100);
+  if (!title) return res.status(400).json({ error: '시험지 이름을 입력해주세요.' });
   const subject_id = req.body.subject_id ?? exam.subject_id;
   const grade_cluster = req.body.grade_cluster ?? exam.grade_cluster;
   const time_limit_sec = req.body.time_limit_sec ?? exam.time_limit_sec;
-  const mode = req.body.mode ?? exam.mode;
+  // 모드는 여기서 바꾸지 않는다 - 응시 기록 검사 등을 거치는 PUT /:id/mode로만 바꾼다.
+  const mode = exam.mode;
 
   await repo.updateExam(id, { title, subject_id, grade_cluster, time_limit_sec, mode });
   res.json(await repo.getExamFull(id));
+});
+
+// 교사가 시험지를 온라인 응시 ↔ 종이 시험지+마킹 모드로 바꾼다.
+// - 학생이 한 명이라도 참여·응시한 시험은 바꿀 수 없다(응시할 때와 결과·오답 재풀이 화면이
+//   달라지므로).
+// - 온라인 → 종이: 문제 내용은 그대로 남고 학생 화면에만 안 보인다(다시 온라인으로 돌리면 복구).
+// - 종이 → 온라인: 문제 내용이 빈 문항이 있으면 학생에게 보여줄 게 없으므로, 확정된 시험이면
+//   "작성 중"으로 되돌려 내용을 채운 뒤 다시 확정하게 한다.
+examsRouter.put('/:id/mode', requireAuth, async (req, res) => {
+  const id = Number(req.params.id);
+  const exam = await repo.getExamFull(id);
+  if (!exam) return res.status(404).json({ error: '시험을 찾을 수 없습니다.' });
+  const mode = req.body?.mode;
+  if (mode !== 'online' && mode !== 'paper_marking') {
+    return res.status(400).json({ error: "mode는 'online' 또는 'paper_marking'이어야 합니다." });
+  }
+  if (exam.status === 'archived') return res.status(400).json({ error: '숨긴 시험지는 모드를 바꿀 수 없습니다.' });
+  if (mode === exam.mode) return res.json(exam);
+  if ((await repo.countExamSessions(id)) > 0) {
+    return res.status(409).json({ error: '이미 학생이 참여한 시험은 모드를 바꿀 수 없습니다.' });
+  }
+
+  const emptyPrompts = exam.questions.filter((q) => !q.prompt.trim() && !q.prompt_image_path).length;
+  const backToDraft = mode === 'online' && exam.status === 'finalized' && emptyPrompts > 0;
+  if (backToDraft && exam.supervised_at && !exam.ends_at) {
+    return res.status(409).json({
+      error: `문제 내용이 비어 있는 문항이 ${emptyPrompts}개 있어 온라인으로 바꾸면 다시 작성 중이 되는데, 지금 감독 중인 시험이라 바꿀 수 없습니다. 감독을 끝낸 뒤 바꿔주세요.`,
+    });
+  }
+  await repo.changeExamMode(id, mode, { backToDraft });
+  res.json({ ...(await repo.getExamFull(id)), mode_change: { empty_prompts: mode === 'online' ? emptyPrompts : 0, back_to_draft: backToDraft } });
 });
 
 // 관리 화면에서만 쓰는 교사용 메모(학생에게는 노출 안 됨) - 제목은 자유롭게 두고
@@ -226,7 +276,14 @@ examsRouter.put('/:id/questions/:qid', requireAuth, async (req, res) => {
   const showPromptText =
     typeof req.body.show_prompt_text === 'boolean' ? req.body.show_prompt_text : Boolean(question.show_prompt_text);
 
-  await repo.updateQuestion(examId, qid, { prompt, points, type, multiSelect, showPromptText });
+  const openAnswer =
+    typeof req.body.open_answer === 'boolean' ? req.body.open_answer : Boolean(question.open_answer);
+
+  await repo.updateQuestion(examId, qid, { prompt, points, type, multiSelect, showPromptText, openAnswer });
+  // "교사 직접 채점"을 켜고 끄면 이미 낸 답의 확인 대기 여부가 바뀐다.
+  if (openAnswer !== Boolean(question.open_answer)) {
+    return res.json(await regradeAfterAnswerKeyChange(examId, qid));
+  }
   const full = await repo.getExamFull(examId);
   res.json(full.questions.find((q) => q.id === qid));
 });
@@ -321,9 +378,13 @@ examsRouter.put('/:id/questions/:qid/choices', requireAuth, async (req, res) => 
     return res.status(400).json({ error: 'choices 배열이 필요합니다.' });
   }
 
-  await repo.setChoices(qid, choices);
-  const full = await repo.getExamFull(examId);
-  res.json(full.questions.find((q) => q.id === qid));
+  try {
+    await repo.setChoices(qid, choices);
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    throw error;
+  }
+  res.json(await regradeAfterAnswerKeyChange(examId, qid));
 });
 
 // ---- 정답(단답형) ----
@@ -340,8 +401,7 @@ examsRouter.put('/:id/questions/:qid/answer', requireAuth, async (req, res) => {
   }
 
   await repo.setShortAnswer(qid, correct_short_answers);
-  const full = await repo.getExamFull(examId);
-  res.json(full.questions.find((q) => q.id === qid));
+  res.json(await regradeAfterAnswerKeyChange(examId, qid));
 });
 
 // ---- 문항 유형 바꾸기 ----
@@ -384,8 +444,7 @@ examsRouter.put('/:id/questions/:qid/keyword-grading', requireAuth, async (req, 
     : (await repo.getExamFull(examId)).questions.find((q) => q.id === qid).keyword_rubric;
 
   await repo.setKeywordGrading(qid, gradingMode, rubric);
-  const full = await repo.getExamFull(examId);
-  res.json(full.questions.find((q) => q.id === qid));
+  res.json(await regradeAfterAnswerKeyChange(examId, qid));
 });
 
 // ---- 성취기준 태깅 ----
@@ -442,9 +501,11 @@ examsRouter.post('/:id/finalize', requireAuth, async (req, res) => {
         reasons.push('정답이 여러 개입니다. "모두 고르기"를 켜거나 정답을 하나만 남겨주세요.');
       }
     } else if (q.type === 'short' && q.grading_mode === 'keyword') {
-      if (q.keyword_rubric.length === 0) reasons.push('서술형 채점 키워드가 설정되지 않았습니다.');
+      // "교사 직접 채점" 서술형은 교사가 점수를 주고 키워드는 제안 점수용이라 비워 둬도 된다.
+      if (!q.open_answer && q.keyword_rubric.length === 0) reasons.push('서술형 채점 키워드가 설정되지 않았습니다.');
     } else if (q.type === 'short') {
-      if (!q.correct_short_answers || q.correct_short_answers.length === 0) {
+      // "교사 직접 채점" 문항은 정답을 미리 다 적을 수 없으니 비워 둬도 된다(학생 답을 보고 정한다).
+      if (!q.open_answer && (!q.correct_short_answers || q.correct_short_answers.length === 0)) {
         reasons.push('정답이 설정되지 않았습니다.');
       }
     }

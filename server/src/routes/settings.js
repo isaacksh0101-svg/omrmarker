@@ -97,9 +97,6 @@ settingsRouter.put('/network', (req, res) => {
   const candidates = getLanIpCandidates();
   const selected = candidates.find((candidate) => candidate.address === address);
   if (!selected) return res.status(400).json({ error: '현재 PC에 연결된 네트워크를 선택해주세요.' });
-  if (selected.networkCategory === 'Public') {
-    return res.status(400).json({ error: 'Windows 공용(Public) 네트워크에서는 학생 접속을 허용할 수 없습니다.' });
-  }
   setStudentNetworkAddress(address);
   res.json({ candidates, selectedAddress: address, selected });
 });

@@ -222,8 +222,9 @@ aiRouter.post('/:id/ai-extract-answers', requireAuth, upload.single('file'), asy
       if (numbers.length > 1 && !q.multi_select) await repo.setMultiSelect(q.id, true);
       applied.push(q.order_index + 1);
     } else {
+      // 복수 인정 답안은 | 로 구분한다. 쉼표는 "8, 1.7"처럼 소문항 답을 묶은 정답의 일부다.
       const answers = raw
-        .split(',')
+        .split('|')
         .map((s) => s.trim())
         .filter(Boolean);
       if (answers.length === 0) {

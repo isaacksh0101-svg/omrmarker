@@ -249,7 +249,7 @@ function StudentAccessSection() {
         <>
           {!lanInfo.accessReady && (
             <p data-testid="student-network-required" className="mt-3 rounded-xl bg-warning/10 px-3 py-2 text-sm font-bold text-warning">
-              학생 접속용 학교 내부 네트워크를 먼저 선택해주세요. 공용(Public) 네트워크는 선택할 수 없습니다.
+              학생 접속용 네트워크를 먼저 선택해주세요.
             </p>
           )}
           <div className="mt-3 flex flex-wrap items-center gap-4">
@@ -292,18 +292,15 @@ function StudentAccessSection() {
                     key={c.address}
                     data-testid={`network-candidate-${c.networkCategory}`}
                     type="button"
-                    disabled={c.networkCategory === 'Public'}
                     onClick={() => selectNetwork(c)}
                     className={`rounded-lg border px-2 py-1.5 text-left text-xs ${
                       lanInfo.selected?.address === c.address
                         ? 'border-accent-ink bg-accent-soft text-accent-ink'
-                        : c.networkCategory === 'Public'
-                          ? 'cursor-not-allowed border-danger/20 bg-danger/5 text-danger'
-                          : 'border-line text-ink-soft'
+                        : 'border-line text-ink-soft'
                     }`}
                   >
                     <span className="font-bold">{c.name}: {c.address}</span>
-                    <span className="ml-1">· {c.profileName || '이름 없음'} · {c.networkCategory === 'Public' ? '공용 — 차단' : c.networkCategory}</span>
+                    <span className="ml-1">· {c.profileName || '이름 없음'} · {c.networkCategory === 'Public' ? '공용' : c.networkCategory}</span>
                   </button>
                 ))}
               </div>

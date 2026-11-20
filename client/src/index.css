@@ -114,3 +114,21 @@ body {
 .animate-overlay-in {
   animation: overlay-in 0.18s ease-out both;
 }
+
+/* 시험 응시 중: 길게 누르기 메뉴(이미지 복사 등)와 글자 선택을 막는다. 답 입력칸은 예외. */
+body.exam-lock,
+body.exam-lock * {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+body.exam-lock img,
+body.exam-lock canvas {
+  -webkit-user-drag: none;
+}
+body.exam-lock input,
+body.exam-lock textarea {
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  user-select: text;
+}

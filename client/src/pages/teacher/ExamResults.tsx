@@ -2,8 +2,11 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../api/client';
 import type { Exam, ExamResultsData, QuestionBreakdown, QuestionStat } from '../../types';
+import { QuestionCorrection } from './QuestionCorrection';
+import { OpenAnswerReview } from './OpenAnswerReview';
 import { Card } from '../../components/Card';
 import { Badge } from '../../components/Badge';
+import { Button } from '../../components/Button';
 import { AccuracyRow } from '../../components/AccuracyRow';
 import { StatCard, StatCardRow } from '../../components/StatCard';
 import { Pagination } from '../../components/Pagination';
@@ -47,10 +50,6 @@ function formatSubmittedAt(iso: string) {
 function insightTooltip(q: QuestionStat, code: string): string | undefined {
   const accuracyPct = q.answered_count > 0 ? Math.round((q.correct_count / q.answered_count) * 100) : 0;
   switch (code) {
-    case 'low_discrimination':
-      return q.discrimination != null
-        ? `점수가 높은 학생과 낮은 학생의 정답 차이가 크지 않습니다(변별도 ${q.discrimination.toFixed(2)}). 문항 난이도나 정답 설정을 확인해보세요.`
-        : undefined;
     case 'difficult_slow':
     case 'fast_wrong':
     case 'accurate_slow':
@@ -126,7 +125,8 @@ export function ExamResults() {
   const [studentFilter, setStudentFilter] = useState<'all' | 'attention' | 'unfinished' | 'forced'>('all');
   const [studentPage, setStudentPage] = useState(1);
   const [standardsPage, setStandardsPage] = useState(1);
-  const [reviewDetail, setReviewDetail] = useState<{ rollNumber: number; data: ReviewDetail } | null>(null);
+  const [reviewDetail, setReviewDetail] = useState<{ sessionId: number; rollNumber: number; data: ReviewDetail } | null>(null);
+  const [closingReview, setClosingReview] = useState(false);
   // 정보량이 많은 화면이라 무거운 카드 3개는 접었다 펼 수 있게 한다 - 가장 자주 보는
   // "문항 분석"·"학생 결과"는 기본으로 펼쳐두고, 성취기준 태깅이 없으면 비어 있는 경우가
   // 많은 "성취기준별 정답률"은 기본으로 접어둔다.
@@ -181,6 +181,36 @@ export function ExamResults() {
     } finally {
       setLoadingBreakdownId(null);
     }
+  }
+
+  // 결과지 서명 받음 체크. 화면에는 바로 반영하고, 저장에 실패하면 되돌린다.
+  async function toggleSigned(sessionId: number, signed: boolean) {
+    const mark = (value: string | null) =>
+      setData((prev) =>
+        prev && {
+          ...prev,
+          sessions: prev.sessions.map((s) => (s.session_id === sessionId ? { ...s, result_signed_at: value } : s)),
+        },
+      );
+    mark(signed ? new Date().toISOString() : null);
+    try {
+      await api.put(`/exams/${id}/sessions/${sessionId}/result-signed`, { signed });
+    } catch {
+      mark(signed ? null : new Date().toISOString());
+      alert('서명 체크를 저장하지 못했습니다.');
+    }
+  }
+
+  // 문항 정정 후 바뀐 정답·점수를 바로 보여준다.
+  async function refreshAfterCorrection(questionId: number | null) {
+    const [nextExam, nextData, breakdown] = await Promise.all([
+      api.get<Exam>(`/exams/${id}`),
+      api.get<ExamResultsData>(`/exams/${id}/results`),
+      questionId == null ? null : api.get<QuestionBreakdown>(`/exams/${id}/questions/${questionId}/breakdown`),
+    ]);
+    setExam(nextExam);
+    setData(nextData);
+    if (questionId != null && breakdown) setBreakdowns((prev) => ({ ...prev, [questionId]: breakdown }));
   }
 
   async function openQuestion(questionId: number, scroll = false) {
@@ -262,7 +292,7 @@ export function ExamResults() {
     safeQuestionPage * QUESTION_PAGE_SIZE,
   );
   const visibleSessions = data.sessions.filter((session) => {
-    if (studentFilter === 'attention') return session.isOutlier;
+    if (studentFilter === 'attention') return session.isOutlier || session.pending_appeals > 0;
     if (studentFilter === 'unfinished') return session.status === 'joined' || session.status === 'in_progress';
     if (studentFilter === 'forced') return session.status === 'force_submitted';
     return true;
@@ -291,7 +321,10 @@ export function ExamResults() {
           점수: s.score ?? '',
           만점: s.max_score ?? '',
           제출시각: s.submitted_at ? new Date(s.submitted_at).toLocaleString('ko-KR') : '',
-          확인필요: s.isOutlier ? s.outlierReasons.join(', ') : '',
+          확인필요: [
+            ...(s.pending_appeals > 0 ? [`이의 제기 ${s.pending_appeals}건`] : []),
+            ...(s.isOutlier ? s.outlierReasons : []),
+          ].join(', '),
         })),
       },
       {
@@ -319,15 +352,45 @@ export function ExamResults() {
           평균풀이시간: formatMs(s.avg_time_spent_ms),
         })),
       },
+      {
+        name: '학생별 성취기준',
+        rows: (data!.studentStandardsAccuracy ?? []).map((s) => ({
+          번호: s.roll_number,
+          이름: data!.sessions.find((session) => session.roll_number === s.roll_number)?.name ?? '',
+          교과: s.subject_name,
+          코드: s.code,
+          내용: s.statement,
+          정답수: s.correct_count,
+          문항수: s.attempted_count,
+          // 외부 도구가 기준값과 바로 비교할 수 있게 숫자(0~100)로 둔다.
+          정답률: Math.round(s.accuracy * 100),
+        })),
+      },
     ]);
   }
 
   async function openReviewDetail(sessionId: number, rollNumber: number) {
     try {
       const detail = await api.get<ReviewDetail>(`/exams/${id}/sessions/${sessionId}/review-assignment`);
-      setReviewDetail({ rollNumber, data: detail });
+      setReviewDetail({ sessionId, rollNumber, data: detail });
     } catch (error) {
       alert(error instanceof Error ? error.message : '재풀이 결과를 불러오지 못했습니다.');
+    }
+  }
+
+  // 학생은 다 맞힐 때까지 재풀이를 이어서 할 수 있다 - 끝까지 못 맞히는 학생은 교사가 여기서
+  // 마감한다. 맞힌/못 맞힌 기록은 그대로 남고, 학생은 더 이상 답을 낼 수 없다.
+  async function closeReview() {
+    if (!reviewDetail) return;
+    if (!confirm(`${reviewDetail.rollNumber}번 학생의 오답 재풀이를 마감할까요?\n\n못 맞힌 문제는 '재오답'으로 남고, 학생은 더 이상 이어서 풀 수 없습니다.`)) return;
+    setClosingReview(true);
+    try {
+      await api.post(`/exams/${id}/sessions/${reviewDetail.sessionId}/review-assignment/close`);
+      await openReviewDetail(reviewDetail.sessionId, reviewDetail.rollNumber);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : '재풀이를 마감하지 못했습니다.');
+    } finally {
+      setClosingReview(false);
     }
   }
 
@@ -339,7 +402,13 @@ export function ExamResults() {
       <div className="animate-fade-in-up mt-3 flex items-center gap-2">
         <h1 className="text-2xl font-bold tracking-tight text-ink">{exam.title}</h1>
         <Badge tone="neutral">결과</Badge>
-        <button className="ml-auto text-xs font-bold text-accent hover:underline" onClick={exportExcel}>
+        <button
+          className="ml-auto text-xs font-bold text-accent hover:underline"
+          onClick={() => navigate(`/exams/${id}/result-sheets`)}
+        >
+          결과지 출력
+        </button>
+        <button className="text-xs font-bold text-accent hover:underline" onClick={exportExcel}>
           엑셀로 다운로드
         </button>
       </div>
@@ -375,6 +444,8 @@ export function ExamResults() {
           )}
         </div>
       )}
+
+      <OpenAnswerReview examId={Number(id)} onChanged={() => refreshAfterCorrection(expandedQuestionId)} />
 
       {notableQuestions.length > 0 && (
         <Card className="animate-fade-in-up mt-6" style={{ animationDelay: '80ms' }}>
@@ -543,8 +614,12 @@ export function ExamResults() {
                           <div key={s.roll_number} className="flex items-center gap-2 py-1.5 text-xs">
                             <span className="w-8 shrink-0 font-bold text-ink">{s.roll_number}</span>
                             <span className="w-16 shrink-0 truncate text-ink-soft">{s.name || '-'}</span>
-                            <span className={`shrink-0 font-bold ${s.is_correct ? 'text-ink-soft' : 'text-danger'}`}>
-                              {s.is_correct ? '정답' : '오답'}
+                            <span
+                              className={`shrink-0 font-bold ${
+                                s.confirm_pending ? 'text-warn' : s.is_correct ? 'text-ink-soft' : 'text-danger'
+                              }`}
+                            >
+                              {s.confirm_pending ? '확인 대기' : s.is_correct ? '정답' : '오답'}
                             </span>
                             {!s.is_correct && (s.awarded_points ?? 0) > 0 && (
                               <span className="shrink-0 font-bold text-warn">
@@ -569,6 +644,17 @@ export function ExamResults() {
                         </div>
                       </>
                     )}
+                    {(() => {
+                      const examQuestion = exam!.questions?.find((eq) => eq.id === q.question_id);
+                      return examQuestion ? (
+                        <QuestionCorrection
+                          examId={Number(id)}
+                          question={examQuestion}
+                          wrongAnswerGroups={breakdown?.wrong_answer_groups ?? null}
+                          onApplied={() => refreshAfterCorrection(q.question_id)}
+                        />
+                      ) : null;
+                    })()}
                   </div>
                 )}
               </div>
@@ -644,6 +730,9 @@ export function ExamResults() {
               <th className="whitespace-nowrap px-3 py-2.5">제출시각</th>
               <th className="whitespace-nowrap px-3 py-2.5">확인 필요</th>
               <th className="whitespace-nowrap px-3 py-2.5">오답 재풀이</th>
+              <th className="whitespace-nowrap px-3 py-2.5" title="출력한 결과지에 학생 확인 서명을 받았으면 체크하세요">
+                서명
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -667,9 +756,19 @@ export function ExamResults() {
                 <td className="px-3 py-2.5">
                   {/* 이유 문구가 길어 이 칸이 표를 옆으로 밀어내면 오른쪽 "오답 재풀이" 칸이 잘린다 -
                       이유마다 배지를 나누고 좁은 폭 안에서 줄바꿈되게 한다. */}
-                  {s.isOutlier && (
+                  {(s.isOutlier || s.pending_appeals > 0 || s.pending_confirms > 0) && (
                     <div className="mx-auto flex max-w-[11rem] flex-wrap justify-center gap-1">
-                      {s.outlierReasons.map((reason) => (
+                      {s.pending_confirms > 0 && (
+                        <Badge tone="warn" wrap title="교사 직접 채점 문항에서 아직 채점하지 않은 답이에요 - 위 '답안 확인'에서 정해주세요.">
+                          채점 확인 {s.pending_confirms}개
+                        </Badge>
+                      )}
+                      {s.pending_appeals > 0 && (
+                        <Badge tone="danger" wrap title="학생이 단답형·서술형 채점에 이의를 제기했어요 - 눌러서 확인해주세요.">
+                          이의 제기 {s.pending_appeals}건
+                        </Badge>
+                      )}
+                      {s.isOutlier && s.outlierReasons.map((reason) => (
                         <Badge key={reason} tone="warn" wrap>
                           {reason}
                         </Badge>
@@ -695,11 +794,22 @@ export function ExamResults() {
                     </div>
                   )}
                 </td>
+                <td className="whitespace-nowrap px-3 py-2.5" onClick={(event) => event.stopPropagation()}>
+                  {s.session_id != null && (s.status === 'submitted' || s.status === 'force_submitted') && (
+                    <input
+                      type="checkbox"
+                      aria-label={`${s.roll_number}번 결과지 서명 받음`}
+                      className="h-4 w-4 cursor-pointer accent-accent"
+                      checked={!!s.result_signed_at}
+                      onChange={(event) => toggleSigned(s.session_id!, event.target.checked)}
+                    />
+                  )}
+                </td>
               </tr>
             ))}
             {visibleSessions.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-4 text-center text-ink-soft">
+                <td colSpan={8} className="px-3 py-4 text-center text-ink-soft">
                   {data.sessions.length === 0 ? '아직 참여한 학생이 없습니다.' : '조건에 맞는 학생이 없습니다.'}
                 </td>
               </tr>
@@ -730,6 +840,14 @@ export function ExamResults() {
             </div>;
           })}</div>
           {reviewDetail.data.assignment.completed_at && <p className="mt-3 text-xs text-ink-soft">완료: {new Date(reviewDetail.data.assignment.completed_at).toLocaleString('ko-KR')}</p>}
+          {reviewDetail.data.assignment.status !== 'completed' && (
+            <div className="mt-4 flex items-center justify-between gap-3 border-t border-line pt-4">
+              <p className="text-xs text-ink-soft">학생은 다 맞힐 때까지 이어서 풀 수 있어요. 여기서 마감하면 지금 결과로 끝나요.</p>
+              <Button variant="secondary" className="shrink-0" disabled={closingReview} onClick={closeReview}>
+                {closingReview ? '마감 중...' : '재풀이 마감'}
+              </Button>
+            </div>
+          )}
         </Card>
       </div>}
     </div>

@@ -218,7 +218,7 @@ export function ShortAnswerGrading({ examId, sessionId, item, editable, onSaved 
       )}
 
       {!item.essay && !item.is_correct && item.correct_short_answers && item.correct_short_answers.length > 0 && (
-        <p className="text-ink-soft">정답: {item.correct_short_answers.join(', ')}</p>
+        <p className="text-ink-soft">정답: {item.correct_short_answers.join(' | ')}</p>
       )}
 
       <div className="flex flex-wrap items-center gap-2">

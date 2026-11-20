@@ -15,6 +15,74 @@ interface Props {
   onChanged: () => void;
 }
 
+// 종이 시험지 모드에서 학생 화면에 보여줄 텍스트 설명(선택). 문제 사진은 학생 화면에 보내지 않지만
+// 여기 적은 글은 답 입력칸 위에 보인다. 칸을 벗어나면 저장한다. 사진이 있는 문항(AI로 불러온 문항 등)은
+// AI가 뽑은 문제 전문이 들어 있을 수 있어 "학생 화면에 보이기"를 켠 경우에만 보인다.
+function PaperPromptInput({ examId, question, onChanged }: { examId: number; question: Question; onChanged: () => void }) {
+  const [value, setValue] = useState(question.prompt);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => setValue(question.prompt), [question.prompt]);
+  const hasImage = !!question.prompt_image_path;
+  const visibleToStudent = !!value.trim() && (!hasImage || question.show_prompt_text);
+
+  async function setShowPromptText(next: boolean) {
+    setError(null);
+    try {
+      await api.put(`/exams/${examId}/questions/${question.id}`, { show_prompt_text: next });
+      onChanged();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : '저장 중 오류가 발생했습니다.');
+    }
+  }
+
+  async function save() {
+    if (value === question.prompt) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.put(`/exams/${examId}/questions/${question.id}`, { prompt: value });
+      onChanged();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : '저장 중 오류가 발생했습니다.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-2">
+      <textarea
+        value={value}
+        rows={value.includes('\n') ? 3 : 1}
+        disabled={saving}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={save}
+        placeholder="학생 화면에 보일 설명 (선택) - 예: 그래프는 시험지 2쪽을 보세요"
+        className="w-full resize-y rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent"
+      />
+      <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px]">
+        {hasImage && (
+          <label className="flex items-center gap-1.5 font-bold text-ink-soft">
+            <input
+              type="checkbox"
+              checked={question.show_prompt_text}
+              onChange={(e) => setShowPromptText(e.target.checked)}
+            />
+            학생 화면에 이 설명 보이기
+          </label>
+        )}
+        {value.trim() && (
+          <span className={visibleToStudent ? 'text-accent' : 'text-ink-soft'}>
+            {visibleToStudent ? '학생 화면에 보여요' : '학생 화면에는 안 보여요 (문제 사진도 안 보여요)'}
+          </span>
+        )}
+      </div>
+      {error && <p className="mt-1 text-xs font-bold text-danger">{error}</p>}
+    </div>
+  );
+}
+
 function typeLabel(q: Question) {
   if (q.type === 'short') return '단답형';
   return `객관식(${q.choices.length}지선다)`;
@@ -136,7 +204,14 @@ export function PaperBuildTab({ examId, questions, standardOptions, missingByQue
             <div
               key={id}
               draggable
-              onDragStart={() => (dragId.current = id)}
+              onDragStart={(e) => {
+                // 설명 칸에서 글자를 드래그로 고르다가 문항 순서 끌기가 시작되지 않게 한다.
+                if ((e.target as HTMLElement).closest?.('textarea, input')) {
+                  e.preventDefault();
+                  return;
+                }
+                dragId.current = id;
+              }}
               onDragOver={(e) => onDragOver(e, id)}
               onDrop={onDrop}
               className={`rounded-xl border px-3 py-2.5 ${missingReasons ? 'border-danger' : 'border-line'} bg-bg`}
@@ -153,6 +228,7 @@ export function PaperBuildTab({ examId, questions, standardOptions, missingByQue
                   삭제
                 </button>
               </div>
+              <PaperPromptInput examId={examId} question={q} onChanged={onChanged} />
               <div className="mt-2">
                 <StandardsPicker
                   options={standardOptions}

@@ -1,6 +1,4 @@
 const MIN_SAMPLE_SIZE = 8;
-// 교육 평가에서 흔히 쓰는 기준(Ebel) - 0.2 미만이면 변별력이 약한 문항으로 본다.
-const LOW_DISCRIMINATION_THRESHOLD = 0.2;
 
 function quantile(sorted, p) {
   if (sorted.length === 0) return null;
@@ -160,11 +158,9 @@ export function attachQuestionInsights(questionStats) {
     }
 
     const analyticsRows = question.analytics_rows ?? [];
+    // 변별도 값은 정렬·Excel 내보내기에만 쓴다. 한 학급 규모에서는 0.2 미만이 너무 흔해
+    // "변별력 낮음" 배지가 대부분 문항에 붙어 신호 역할을 못 해서 배지는 달지 않는다.
     const discrimination = computeDiscrimination(analyticsRows);
-    if (discrimination != null && discrimination < LOW_DISCRIMINATION_THRESHOLD) {
-      insightCodes.push('low_discrimination');
-      insightReasons.push('변별력 낮음');
-    }
     const choiceDistribution = computeChoiceDistribution(analyticsRows, question.choice_ids ?? []);
 
     const { time_values_ms: _privateTimes, analytics_rows: _privateRows, choice_ids: _privateChoiceIds, ...publicQuestion } = question;

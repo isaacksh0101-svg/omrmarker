@@ -1,7 +1,7 @@
 {
   "name": "scorelab-desktop",
   "private": true,
-  "version": "2.3.1",
+  "version": "2.3.2",
   "description": "ScoreLab을 설치형 데스크톱 앱(.exe)으로 감싸는 Electron 셸 - server/client 코드는 그대로 두고 실행 방식만 추가한다.",
   "main": "main.js",
   "scripts": {

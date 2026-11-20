@@ -29,6 +29,16 @@ const CATEGORY_TABLES = {
   grades: ['exam_sessions', 'answers', 'warning_events'],
 };
 
+// 나중에 추가된 테이블 - 내보낼 때는 함께 담지만, 이 테이블이 생기기 전에 만든 백업 파일도
+// 그대로 가져올 수 있도록 "필수 테이블" 검사에서는 뺀다.
+const OPTIONAL_CATEGORY_TABLES = {
+  grades: ['answer_appeals'],
+};
+
+function hasTable(database, schema, table) {
+  return !!database.prepare(`SELECT 1 FROM ${schema}.sqlite_master WHERE type = 'table' AND name = ?`).get(table);
+}
+
 const CATEGORY_LABELS = {
   exams: '시험지',
   roster: '학생-명단',
@@ -67,6 +77,9 @@ export function buildCategoryExportFile(sourceDbPath, category, destPath) {
     tmpDb.exec(`ATTACH DATABASE ${quoteLiteral(sourceDbPath)} AS src`);
     for (const table of CATEGORY_TABLES[category]) {
       copyMatchingColumns(tmpDb, 'src', 'main', table);
+    }
+    for (const table of OPTIONAL_CATEGORY_TABLES[category] ?? []) {
+      if (hasTable(tmpDb, 'src', table)) copyMatchingColumns(tmpDb, 'src', 'main', table);
     }
     tmpDb.exec('DETACH DATABASE src');
     // 카테고리 표시: 파일 내용만으론(항상 전체 스키마를 들고 있어서) 어떤 카테고리인지
@@ -197,12 +210,17 @@ export function applyCategoryImport(targetDb, category, filePath) {
       targetDb.exec('DELETE FROM roster');
       targetDb.exec('INSERT INTO roster (id, roll_number, name) SELECT id, roll_number, name FROM src.roster');
     } else if (category === 'grades') {
+      targetDb.exec('DELETE FROM answer_appeals');
       targetDb.exec('DELETE FROM warning_events');
       targetDb.exec('DELETE FROM answers');
       targetDb.exec('DELETE FROM exam_sessions');
       copyMatchingColumns(targetDb, 'src', 'main', 'exam_sessions');
       copyMatchingColumns(targetDb, 'src', 'main', 'answers');
       copyMatchingColumns(targetDb, 'src', 'main', 'warning_events');
+      // 이의 제기 기능 이전에 만든 백업에는 이 테이블이 없다 - 있으면 복원하고 없으면 비워 둔다.
+      if (hasTable(targetDb, 'src', 'answer_appeals')) {
+        copyMatchingColumns(targetDb, 'src', 'main', 'answer_appeals');
+      }
     } else if (category === 'exams') {
       const examIdMap = new Map();
       const questionIdMap = new Map();

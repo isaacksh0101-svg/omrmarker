@@ -6,6 +6,7 @@ import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
 import { Badge } from '../../components/Badge';
 import { PenCanvas, type PenCanvasHandle, type PenTool } from '../../components/PenCanvas';
+import { clearLocalStrokes, clearOtherLocalStrokes, loadLocalStrokes, saveLocalStrokes } from '../../lib/localStrokes';
 import { ChoiceNumberPicker, ChoiceTextList } from '../../components/ChoiceList';
 import { QuestionPrompt } from '../../components/QuestionPrompt';
 import { IconEraser, IconFingerDraw, IconGrip, IconPen, IconTrash, IconUndo } from '../../components/icons';
@@ -75,14 +76,15 @@ function AntiCheatNotice() {
       <div>
         <p className="text-sm font-bold text-danger">시험 중 다른 화면으로 이동하면 안 됩니다</p>
         <p className="mt-1 text-xs text-ink-soft">
-          탭 전환, 창 전환, 최소화 등으로 화면을 벗어나는 순간 그 즉시 시험이 강제로 종료됩니다. 실수로
-          종료됐다면 선생님께 바로 말씀해주세요.
+          탭 전환, 창 전환, 최소화 등으로 화면을 벗어나는 순간 그 즉시 시험이 강제로 종료됩니다. 알림창
+          등으로 잠깐 벗어났다 돌아오는 것도 몇 번까지만 봐주고, 그 뒤로는 종료됩니다. 실수로 종료됐다면
+          선생님께 바로 말씀해주세요.
         </p>
       </div>
       <div className="border-t border-danger/15 pt-3">
         <p className="text-xs font-bold text-ink">시험 데이터 처리 안내</p>
         <p className="mt-1 text-xs leading-relaxed text-ink-soft">
-          번호, 답안, 점수, 문항별 소요시간, 필기와 화면 이탈 기록은 시험 운영·채점·학습분석을 위해
+          번호, 답안, 점수, 문항별 소요시간, 필기, 화면 이탈 기록과 이의 제기 내용은 시험 운영·채점·학습분석을 위해
           선생님 PC에 저장되며 학기 말에 삭제됩니다. 열람·정정·삭제가 필요하면 담당 선생님께 요청하세요.
         </p>
       </div>
@@ -112,6 +114,19 @@ export function TakeExam() {
   // 요청이 허용된다)를 거쳤는지 - 응시가 갑자기 자동으로 시작돼도(교사가 원격으로 시작
   // 버튼을 누름) 학생 쪽엔 클릭 한 번이 필요해서 이 게이트를 둔다.
   const [examStarted, setExamStarted] = useState(false);
+  // 전체화면만 풀리고 화면은 계속 보이는 상태(브라우저의 전체화면 닫기 X 버튼 등) - 종료시키지
+  // 않고 문제를 가린 채 "전체화면으로 돌아가기" 버튼을 보여준다.
+  const [fullscreenLost, setFullscreenLost] = useState(false);
+  // 이벤트 핸들러(타이머 안)에서 최신 값을 읽기 위한 사본.
+  const fullscreenLostRef = useRef(false);
+  fullscreenLostRef.current = fullscreenLost;
+  // 창이 포커스를 잃은 상태 - 3초 유예를 기다리지 않고 그 즉시 문제를 가린다. 화면 분할이나
+  // 팝업으로 띄운 AI 창에 문제를 보면서 입력하지 못하게 하기 위함.
+  const [focusLost, setFocusLost] = useState(false);
+  // 이번 이탈(포커스를 잃고 다시 돌아오기까지 한 번)을 이미 짧은 이탈로 보고했는지. 전체화면
+  // 닫기 X 버튼처럼 fullscreenchange와 focus 복귀가 각각 보고를 부르는 경우가 있어, 한 번의
+  // 이탈이 서버의 허용 횟수를 두 번 깎지 않게 한다.
+  const softReportedRef = useRef(false);
 
   const [exam, setExam] = useState<PublicExam | null>(null);
   const [session, setSession] = useState<ExamSession | null>(null);
@@ -119,6 +134,9 @@ export function TakeExam() {
   // 답안 확인 화면에서 "최종 제출"을 한 번 누르면 답하지 않은 문항 경고를 보여주고, 한 번 더
   // 눌러야 제출한다. 브라우저 confirm() 창은 화면 이탈(blur)로 잡혀 강제 종료되므로 쓰지 않는다.
   const [confirmingSubmit, setConfirmingSubmit] = useState(false);
+  // 답안 확인 화면을 한 번이라도 봤으면, 건너뛴 문제로 돌아가 푼 뒤 "다음"으로 마지막 문제까지
+  // 다시 넘기지 않고 바로 답안 확인으로 돌아갈 수 있게 버튼을 하나 더 보여준다.
+  const [visitedSummary, setVisitedSummary] = useState(false);
   const [selectedChoices, setSelectedChoices] = useState<number[]>([]);
   const [shortAnswer, setShortAnswer] = useState('');
   const [remainingSec, setRemainingSec] = useState<number | null>(null);
@@ -206,6 +224,7 @@ export function TakeExam() {
       await finalSubmit();
       return;
     }
+    if (c.summary) setVisitedSummary(true);
     setCurrent(c);
     setConfirmingSubmit(false);
     setSelectedChoices(c.my_answer?.selected_choice_ids ?? []);
@@ -219,6 +238,7 @@ export function TakeExam() {
     setSession(null);
     setCurrent(null);
     setRemainingSec(null);
+    setVisitedSummary(false);
     setExamStarted(false);
     disqualifyingRef.current = false;
     fullscreenArmedRef.current = false;
@@ -240,9 +260,37 @@ export function TakeExam() {
   const activeQuestion: PublicQuestion | null = current?.question ?? null;
 
   // 문항이 바뀔 때마다 그 문항에 전에 써 둔 필기를 다시 그린다(처음 보는 문항이면 빈 캔버스).
+  // 필기는 이 기기에만 임시 보관한다(lib/localStrokes). 예전에 서버에 저장된 필기가 있으면 그것을 쓴다.
+  const strokeQuestionIdRef = useRef<number | null>(null);
   useEffect(() => {
-    penRef.current?.load(current?.my_answer?.strokes ?? null);
-  }, [activeQuestion?.id, current?.my_answer?.strokes]);
+    // 불러오는 동안(load가 onStrokesChange를 부른다) 저장하지 않도록, 불러온 뒤에 문항 id를 정한다.
+    strokeQuestionIdRef.current = null;
+    const qid = activeQuestion?.id;
+    penRef.current?.load(
+      current?.my_answer?.strokes ?? (qid != null ? loadLocalStrokes('exam', sessionId, qid) : null),
+    );
+    strokeQuestionIdRef.current = qid ?? null;
+    // examStarted: 새로고침 뒤 "시작하기"를 누르기 전에는 필기 캔버스가 아직 없다 - 누른 뒤에 다시 불러온다.
+  }, [activeQuestion?.id, current?.my_answer?.strokes, sessionId, examStarted]);
+
+  // 한 획을 마칠 때마다(지우기·되돌리기 포함) 이 기기에 저장한다 - 다음 문항으로 넘어가거나
+  // 화면이 새로고침돼도 남는다.
+  function handleStrokesChange(has: boolean) {
+    setHasStrokes(has);
+    const qid = strokeQuestionIdRef.current;
+    const pen = penRef.current;
+    if (qid == null || !pen) return;
+    saveLocalStrokes('exam', sessionId, qid, pen.getStrokes(), pen.getCanvasSize());
+  }
+
+  // 시험을 마치면 이 기기에 남긴 필기를 지운다(다음 학생이 같은 기기를 쓸 수 있으므로). 이 기기에서
+  // 앞서 다른 응시의 필기가 남아 있으면 그것도 지운다.
+  const finished = session?.status === 'submitted' || session?.status === 'force_submitted';
+  useEffect(() => {
+    if (!sessionId) return;
+    clearOtherLocalStrokes('exam', sessionId);
+    if (finished) clearLocalStrokes('exam', sessionId);
+  }, [sessionId, finished]);
 
   useEffect(() => {
     const panel = floatRef.current;
@@ -301,13 +349,70 @@ export function TakeExam() {
     return () => clearInterval(interval);
   }, [session, exam, id, sessionId, reloadSession]);
 
-  // 응시 중 다른 화면으로 이탈하면(탭 전환, 창 최소화, 전체화면 해제 등) 즉시 지금까지
-  // 낸 답만으로 시험을 강제 제출 처리한다 - 경고를 몇 번 봐주는 방식은 "나가서 답을
-  // 찾아보고 돌아오면 그만"인 허점이 있어서, 첫 이탈부터 바로 종료시키는 쪽으로 바꿨다.
-  // 억울하게(알림창, 실수 등) 종료된 경우엔 교사에게 소명해서 "되살리기"로 이어서 풀면 된다.
+  // 응시 중에는 화면 자동 꺼짐을 막는다 - 태블릿에서 문제를 오래 고민하는 사이 화면이 꺼지면
+  // document.hidden이 되어 이탈로 즉시 강제 종료되는 일이 있었다. 화면이 가려지면 브라우저가
+  // wake lock을 자동으로 풀어버리므로, 다시 보이게 될 때마다 새로 요청한다. 지원하지 않는
+  // 브라우저(구형 iOS Safari 등)나 저전력 모드에서 거부되면 조용히 넘어간다.
+  useEffect(() => {
+    if (session?.status !== 'in_progress') return;
+    type WakeLockSentinelLike = { release: () => Promise<void> };
+    const wakeLockApi = (navigator as Navigator & {
+      wakeLock?: { request: (type: 'screen') => Promise<WakeLockSentinelLike> };
+    }).wakeLock;
+    if (!wakeLockApi) return;
+    let sentinel: WakeLockSentinelLike | null = null;
+    let disposed = false;
+
+    async function acquire() {
+      if (document.hidden || !wakeLockApi) return;
+      try {
+        const s = await wakeLockApi.request('screen');
+        if (disposed) s.release().catch(() => {});
+        else sentinel = s;
+      } catch {
+        // 거부됨(저전력 모드, 권한 정책 등) - 감지 동작에는 영향 없음.
+      }
+    }
+    function onVisible() {
+      if (!document.hidden) acquire();
+    }
+
+    acquire();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      disposed = true;
+      document.removeEventListener('visibilitychange', onVisible);
+      sentinel?.release().catch(() => {});
+      sentinel = null;
+    };
+  }, [session?.status]);
+
+  // 응시 중 다른 화면으로 이탈하면 지금까지 낸 답만으로 시험을 강제 제출 처리한다.
+  // - 화면이 가려짐(탭·앱 전환, 화면 꺼짐): 즉시 종료.
+  // - 포커스를 잃음(알림창, S펜 에어 커맨드, 다른 앱 팝업 창 등): BLUR_GRACE_MS 안에 돌아오면
+  //   종료하지 않고 기록만 남긴다. 그보다 오래 다른 곳에 머물면(예: 팝업 계산기를 띄워 씀) 종료.
+  // - 전체화면만 풀림(브라우저의 전체화면 닫기 X 버튼 등)이고 화면은 계속 보임: 종료하지 않고
+  //   문제를 가린 채 "전체화면으로 돌아가기" 버튼을 띄우고 기록만 남긴다.
+  // 실제 시험에서 펜 옆 버튼·알림창 내리기·X 버튼으로 학생들이 억울하게 종료되는 일이 있어서
+  // 이렇게 나눴다. 억울하게 종료된 경우엔 교사가 "되살리기"로 이어서 풀게 하면 된다.
   useEffect(() => {
     if (session?.status !== 'in_progress') return;
     disqualifyingRef.current = false;
+    softReportedRef.current = false;
+    setFullscreenLost(false);
+    setFocusLost(!document.hasFocus());
+    const BLUR_GRACE_MS = 3000;
+    // 전체화면이 풀려 가림 화면이 떠 있을 때, 포커스 없이 추가로 기다려 주는 시간.
+    const OVERLAY_FOCUS_GRACE_MS = 7000;
+    let blurTimer: number | null = null;
+    let fullscreenTimer: number | null = null;
+
+    function clearTimers() {
+      if (blurTimer != null) window.clearTimeout(blurTimer);
+      if (fullscreenTimer != null) window.clearTimeout(fullscreenTimer);
+      blurTimer = null;
+      fullscreenTimer = null;
+    }
 
     async function disqualify(type: 'visibility_hidden' | 'window_blur') {
       // blur/visibilitychange/fullscreenchange가 같은 탭 전환 한 번에 여러 번 겹쳐 뜰 수
@@ -315,6 +420,8 @@ export function TakeExam() {
       // 중복 요청 자체는 안전하지만, 화면 전환을 굳이 여러 번 반복할 필요는 없다).
       if (disqualifyingRef.current) return;
       disqualifyingRef.current = true;
+      clearTimers();
+      setFullscreenLost(false);
       try {
         await api.post(`/exams/${id}/sessions/${sessionId}/warning`, { type });
       } catch {
@@ -324,29 +431,157 @@ export function TakeExam() {
       setCurrent(null);
     }
 
+    // 종료시키지 않는 이탈 기록 - 교사 감독 화면의 "경고 발생"에 잡힌다. 서버가 허용 횟수를
+    // 넘었다고 판단하면 이 기록으로 강제 종료되므로, 그 경우 종료 화면으로 바로 전환한다.
+    async function reportSoft() {
+      if (disqualifyingRef.current || softReportedRef.current) return;
+      softReportedRef.current = true;
+      try {
+        const result = await api.post<{ disqualified?: boolean }>(`/exams/${id}/sessions/${sessionId}/warning`, {
+          type: 'window_blur',
+          soft: true,
+        });
+        if (result?.disqualified && !disqualifyingRef.current) {
+          disqualifyingRef.current = true;
+          clearTimers();
+          setFullscreenLost(false);
+          setFocusLost(false);
+          await reloadSession();
+          setCurrent(null);
+        }
+      } catch {
+        // 네트워크 오류 등은 무시 - 주기적인 세션 폴링이 최신 상태를 가져온다.
+      }
+    }
+
+    function isArmedButNotFullscreen() {
+      return fullscreenArmedRef.current && !getFullscreenElementCompat();
+    }
+    // 시험 화면에 완전히 돌아왔으면(포커스 있음, 전체화면 응시 중이면 전체화면도 복구) 이번
+    // 이탈을 마무리한다 - 다음에 또 벗어나면 새 이탈로 센다. 전체화면이 풀린 채 가림 화면만
+    // 눌러 포커스가 돌아온 상태는 아직 같은 이탈이 이어지는 중으로 본다.
+    function closeIncidentIfBack() {
+      if (document.hasFocus() && !document.hidden && !isArmedButNotFullscreen()) {
+        softReportedRef.current = false;
+      }
+    }
     function onVisibilityChange() {
       if (document.hidden) disqualify('visibility_hidden');
     }
     function onBlur() {
-      disqualify('window_blur');
+      if (document.hidden) {
+        disqualify('visibility_hidden');
+        return;
+      }
+      setFocusLost(true);
+      if (blurTimer != null) return;
+      // 가림 화면이 이미 떠 있는 상태에서 포커스를 잃었다면(ESC 등으로 전체화면을 끈 뒤 다른
+      // 창으로 감) X 버튼 때문에 포커스가 빠진 경우가 아니므로 추가 유예 없이 판단한다.
+      const overlayAlreadyShown = fullscreenLostRef.current;
+      blurTimer = window.setTimeout(() => {
+        blurTimer = null;
+        if (document.hidden) disqualify('visibility_hidden');
+        else if (overlayAlreadyShown && !document.hasFocus()) disqualify('window_blur');
+        // 전체화면 닫기 X 버튼은 브라우저 자체 UI라, 누르면 포커스가 그쪽으로 가서 학생이 페이지를
+        // 다시 누를 때까지 돌아오지 않는다. 이때는 "전체화면으로 돌아가기" 화면이 문제를 가리고
+        // 있으므로 OVERLAY_FOCUS_GRACE_MS만큼 더 기다려 준다. 그래도 계속 다른 곳(나란히 띄운 창,
+        // 화면 분할 앱 등)에 머물면 검색 등 딴짓으로 보고 종료한다. 화면이 가려지면 즉시 종료.
+        else if (fullscreenLostRef.current || isArmedButNotFullscreen()) {
+          // fullscreenchange를 놓친 기기라도 문제가 보이는 채로 두지 않도록 가림 화면을 확실히 띄운다.
+          setFullscreenLost(true);
+          blurTimer = window.setTimeout(() => {
+            blurTimer = null;
+            if (document.hidden) disqualify('visibility_hidden');
+            else if (!document.hasFocus()) disqualify('window_blur');
+          }, OVERLAY_FOCUS_GRACE_MS);
+        }
+        else if (!document.hasFocus()) disqualify('window_blur');
+        else {
+          reportSoft();
+          closeIncidentIfBack();
+        }
+      }, BLUR_GRACE_MS);
     }
-    // 전체화면 모드로 응시 중이면(fullscreenArmedRef), 전체화면이 풀리는 순간도 이탈로
-    // 본다 - 탭 전환/창 전환/최소화 대부분이 전체화면도 같이 해제시키므로 blur보다 더
-    // 이르고 확실한 신호다. 서버 스키마에 별도 이벤트 타입을 추가하는 대신 기존
-    // 'window_blur'로 기록한다(의미상 크게 다르지 않고, DB 마이그레이션을 피할 수 있다).
+    function onFocus() {
+      setFocusLost(false);
+      if (blurTimer != null) {
+        window.clearTimeout(blurTimer);
+        blurTimer = null;
+        reportSoft();
+      }
+      closeIncidentIfBack();
+    }
+    // 전체화면 모드로 응시 중이면(fullscreenArmedRef) 전체화면이 풀린 걸 감지한다. 탭 전환이면
+    // visibilitychange가 곧 뒤따르므로 잠깐 기다렸다가, 화면이 여전히 보이면 X 버튼 등으로
+    // 전체화면만 풀린 것으로 보고 돌아가기 화면을 띄운다.
     function onFullscreenChange() {
-      if (fullscreenArmedRef.current && !getFullscreenElementCompat()) disqualify('window_blur');
+      if (!fullscreenArmedRef.current) return;
+      if (getFullscreenElementCompat()) {
+        setFullscreenLost(false);
+        closeIncidentIfBack();
+        return;
+      }
+      if (fullscreenTimer != null) window.clearTimeout(fullscreenTimer);
+      fullscreenTimer = window.setTimeout(() => {
+        fullscreenTimer = null;
+        if (document.hidden) {
+          disqualify('visibility_hidden');
+          return;
+        }
+        if (getFullscreenElementCompat()) return;
+        setFullscreenLost(true);
+        reportSoft();
+      }, 400);
     }
 
     document.addEventListener('visibilitychange', onVisibilityChange);
     window.addEventListener('blur', onBlur);
+    window.addEventListener('focus', onFocus);
     addFullscreenChangeListener(onFullscreenChange);
     return () => {
+      clearTimers();
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('blur', onBlur);
+      window.removeEventListener('focus', onFocus);
       removeFullscreenChangeListener(onFullscreenChange);
     };
   }, [session?.status, id, sessionId, reloadSession]);
+
+  // "전체화면으로 돌아가기" 버튼 - 브라우저는 학생이 직접 누른 동작이 있어야만 전체화면을
+  // 허용하므로 자동으로 되돌릴 수 없다. 전체화면에 다시 못 들어가는 기기면(거부됨) 막힌 채로
+  // 두지 않고, 그 뒤로는 blur/visibilitychange 감지만으로 이어서 응시하게 한다.
+  async function returnToFullscreen() {
+    try {
+      await requestFullscreenCompat(document.documentElement);
+    } catch {
+      fullscreenArmedRef.current = false;
+      // 전체화면에 못 돌아가는 기기 - 그래도 시험 화면에는 돌아왔으므로 이번 이탈을 마무리한다.
+      if (document.hasFocus()) softReportedRef.current = false;
+    }
+    setFullscreenLost(false);
+  }
+
+  // 응시 중에는 길게 누르기 메뉴("이미지 복사", 구글 렌즈, 웹 검색 등)와 글자 선택, 끌기를
+  // 막는다. 펜으로 한 곳을 오래 누르면 이 메뉴가 뜨고, 그 과정에서 전체화면이 풀려 이탈로
+  // 강제 종료되는 일이 실제 시험에서 있었다. 답 입력칸(input/textarea)은 그대로 쓸 수 있게 둔다.
+  useEffect(() => {
+    if (session?.status !== 'in_progress') return;
+    const isTextField = (target: EventTarget | null) =>
+      target instanceof HTMLElement && !!target.closest('input, textarea, [contenteditable="true"]');
+    const block = (e: Event) => {
+      if (!isTextField(e.target)) e.preventDefault();
+    };
+    document.addEventListener('contextmenu', block, true);
+    document.addEventListener('selectstart', block, true);
+    document.addEventListener('dragstart', block, true);
+    document.body.classList.add('exam-lock');
+    return () => {
+      document.removeEventListener('contextmenu', block, true);
+      document.removeEventListener('selectstart', block, true);
+      document.removeEventListener('dragstart', block, true);
+      document.body.classList.remove('exam-lock');
+    };
+  }, [session?.status]);
 
   // 시험이 시작되면(교사가 원격으로 시작시켜도) 바로 문제를 보여주지 않고, 학생이 직접
   // 누르게 해서 그 클릭을 전체화면 진입 제스처로 쓴다 - 브라우저는 사용자 동작 없이
@@ -375,7 +610,11 @@ export function TakeExam() {
       let hasAnswer = false;
       if (q) {
         body.question_id = q.id;
-        const strokes = penRef.current?.getStrokes() ?? [];
+        // 임시: 필기가 많으면 요청이 커져 "다음"이 거절되던 문제 때문에 필기 전송을 끈다.
+        // 대신 필기는 이 기기에 문항별로 남겨 돌아오면 다시 그린다(handleStrokesChange).
+        // 다시 켜려면 SEND_STROKES를 true로 바꾼다(서버 sessions.js의 STROKES_SAVE_DISABLED도 함께).
+        const SEND_STROKES = false;
+        const strokes = SEND_STROKES ? (penRef.current?.getStrokes() ?? []) : [];
         if (strokes.length > 0) {
           body.strokes = strokes;
           body.strokes_canvas_size = penRef.current?.getCanvasSize();
@@ -442,6 +681,7 @@ export function TakeExam() {
       session.max_score && session.max_score > 0
         ? Math.round(((session.score ?? 0) / session.max_score) * 100)
         : 0;
+    const pendingCount = (session.answers ?? []).filter((a) => a.confirm_pending).length;
     return (
       <div className="mx-auto flex min-h-screen max-w-xl flex-col justify-center px-8 py-10">
         <h1 className="text-2xl font-bold text-ink">
@@ -460,21 +700,38 @@ export function TakeExam() {
             {session.score} / {session.max_score}
           </p>
           <p className="mt-1 text-sm text-ink-soft">정답률 {pct}%</p>
+          {pendingCount > 0 && (
+            <p className="mt-2 text-sm font-bold text-warn">
+              선생님이 확인 중인 문항이 {pendingCount}개 있어요. 확인이 끝나면 점수가 확정돼요.
+            </p>
+          )}
         </Card>
         <div className="mt-5 flex flex-wrap gap-2">
           {(session.answers ?? []).map((a) => (
             <span
               key={a.order_index}
-              className={`flex h-9 w-9 items-center justify-center rounded-full text-sm font-bold ${
-                a.is_correct ? 'bg-good/15 text-good' : 'bg-danger/15 text-danger'
+              title={a.confirm_pending ? '선생님 확인 후 정답 확정' : undefined}
+              className={`flex h-9 min-w-9 items-center justify-center rounded-full px-2 text-sm font-bold ${
+                a.confirm_pending
+                  ? 'bg-warn/15 text-warn'
+                  : a.is_correct
+                    ? 'bg-good/15 text-good'
+                    : 'bg-danger/15 text-danger'
               }`}
             >
               {a.order_index + 1}
+              {a.confirm_pending ? ' ?' : ''}
             </span>
           ))}
         </div>
+        {pendingCount > 0 && (
+          <p className="mt-2 text-xs text-ink-soft">
+            <span className="font-bold text-warn">?</span> 표시는 선생님이 채점 중인 문항이에요. 나머지 틀린 문항은 지금 바로
+            다시 풀 수 있고, 채점 중인 문항은 오답으로 확정되면 그때 오답 재풀이에 추가돼요.
+          </p>
+        )}
         <div className="mt-7 flex flex-wrap gap-2">
-          {(session.answers ?? []).some((a) => !a.is_correct) && (
+          {(session.answers ?? []).some((a) => !a.is_correct && !a.confirm_pending) && (
             <Button variant="secondary" onClick={() => navigate(`/student/exam/${id}/review`)}>
               틀린 문항 다시 풀기
             </Button>
@@ -502,6 +759,26 @@ export function TakeExam() {
     );
   }
 
+  // 전체화면만 풀렸을 때 문제를 가리는 화면 - 문항 화면을 그대로 둔 채(필기 보존) 위에 덮는다.
+  const fullscreenOverlay = fullscreenLost ? (
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-bg px-8 text-center">
+      <p className="text-xl font-bold text-ink">전체화면이 풀렸어요</p>
+      <p className="text-base text-ink-soft">아래 버튼을 눌러 시험 화면으로 돌아가세요.</p>
+      <Button className="text-base" onClick={returnToFullscreen}>
+        전체화면으로 돌아가기
+      </Button>
+    </div>
+  ) : focusLost ? (
+    // 포커스를 잃은 즉시 문제를 가리는 화면 - 화면을 한 번 누르면 포커스가 돌아와 사라진다.
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-bg px-8 text-center">
+      <p className="text-xl font-bold text-ink">시험 화면을 벗어났어요</p>
+      <p className="text-base text-ink-soft">화면을 눌러 시험으로 돌아오세요.</p>
+      <p className="max-w-sm text-sm text-danger">
+        화면을 벗어난 기록은 선생님께 전달되고, 여러 번 반복되면 시험이 자동으로 종료돼요.
+      </p>
+    </div>
+  ) : null;
+
   // in_progress - 마지막 문항 다음의 답안 확인 화면. 번호를 누르면 그 문항으로 가고,
   // "최종 제출"을 눌러야 제출된다.
   if (current?.summary) {
@@ -509,6 +786,7 @@ export function TakeExam() {
     const unanswered = answered.filter((a) => !a).length;
     return (
       <div className="mx-auto flex min-h-screen max-w-2xl flex-col px-6 py-10">
+        {fullscreenOverlay}
         <div className="flex items-center justify-between gap-3">
           <h1 className="text-xl font-bold text-ink">답안 확인</h1>
           {remainingSec !== null && (
@@ -587,7 +865,10 @@ export function TakeExam() {
 
   return (
     <div className="flex flex-col overflow-hidden bg-bg" style={{ height: visibleViewport.height }}>
-      <header className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel px-4 py-2.5 sm:px-6">
+      {fullscreenOverlay}
+      {/* 휴대폰처럼 좁은 화면에서는 필기 도구가 한 줄에 다 들어가지 않아 오른쪽이 잘리므로,
+          도구 묶음을 둘째 줄로 내려 화면 너비 전체를 쓰게 한다. */}
+      <header className="sticky top-0 z-10 flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-line bg-panel px-4 py-2.5 sm:flex-nowrap sm:px-6">
         <div className="min-w-0 flex-1">
           <p className="truncate text-base font-bold text-ink">{exam.title}</p>
         </div>
@@ -597,7 +878,7 @@ export function TakeExam() {
         {remainingSec !== null && (
           <Badge tone={remainingSec <= 30 ? 'danger' : 'neutral'}>{formatTime(remainingSec)}</Badge>
         )}
-        <div className="flex items-center gap-1">
+        <div className="flex w-full items-center justify-between gap-1 sm:w-auto sm:justify-start">
           <>
               {PEN_COLORS.map((c) => (
                 <button
@@ -696,7 +977,7 @@ export function TakeExam() {
               tool={penTool}
               color={penColor}
               allowTouch={fingerMode}
-              onStrokesChange={setHasStrokes}
+              onStrokesChange={handleStrokesChange}
             />
           </div>
         </div>
@@ -761,6 +1042,11 @@ export function TakeExam() {
         <Button className="text-base" disabled={submitting} onClick={() => move('next')}>
           {isLast ? '답안 확인' : '다음'}
         </Button>
+        {visitedSummary && !isLast && (
+          <Button variant="secondary" className="text-base" disabled={submitting} onClick={() => move('summary')}>
+            답안 확인으로
+          </Button>
+        )}
       </div>
     </div>
   );

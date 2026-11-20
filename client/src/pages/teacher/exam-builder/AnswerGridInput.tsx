@@ -40,7 +40,7 @@ function AnswerInput({
   onToggleRubric,
 }: CellProps) {
   const [mcNumber, setMcNumber] = useState(correctNumbersText(question));
-  const [shortAnswer, setShortAnswer] = useState((question.correct_short_answers ?? []).join(', '));
+  const [shortAnswer, setShortAnswer] = useState((question.correct_short_answers ?? []).join(' | '));
 
   async function saveMcNumber() {
     const numbers = parseMcNumbers(mcNumber, question.choices.length);
@@ -54,9 +54,11 @@ function AnswerInput({
     onChanged();
   }
 
+  // 복수 인정 답안은 | 로 구분한다. 쉼표는 "8, 1.7"처럼 소문항 답을 순서대로 묶은 정답에
+  // 쓰이므로 답의 일부로 그대로 둔다(채점할 때 쉼표 앞뒤 띄어쓰기는 무시된다).
   async function saveShortAnswer() {
     const answers = shortAnswer
-      .split(',')
+      .split('|')
       .map((s) => s.trim())
       .filter(Boolean);
     if (answers.length === 0) return;
@@ -87,7 +89,8 @@ function AnswerInput({
         className="h-9 w-full px-3 text-center text-xs font-bold text-accent hover:bg-accent-soft"
         onClick={onToggleRubric}
       >
-        {count > 0 ? `핵심 내용 ${count}개` : '채점 키워드 입력'} {rubricOpen ? '▲' : '▼'}
+        {count > 0 ? `핵심 내용 ${count}개` : question.open_answer ? '키워드 (선택)' : '채점 키워드 입력'}{' '}
+        {rubricOpen ? '▲' : '▼'}
       </button>
     );
   }
@@ -106,8 +109,12 @@ function AnswerInput({
   ) : (
     <input
       ref={inputRef}
-      placeholder="정답"
-      title={isInvalid ? '정답이 설정되지 않았습니다.' : undefined}
+      placeholder={question.open_answer ? '예시 정답 (비워 둬도 됨)' : '정답 (여러 개 인정: 5 | 5개)'}
+      title={
+        isInvalid
+          ? '정답이 설정되지 않았습니다.'
+          : '여러 답을 인정하려면 | 로 구분하세요. 소문항 답은 "8, 1.7"처럼 쉼표로 묶어 하나의 정답으로 적습니다.'
+      }
       className={inputClass}
       value={shortAnswer}
       onChange={(e) => setShortAnswer(e.target.value)}
@@ -131,12 +138,18 @@ interface OptionProps {
   onEssayEnabled: () => void;
 }
 
-// 문항 유형(객관식/단답형/서술형)과, 객관식이면 "모두 고르기" 옵션.
+// 문항 유형(객관식/단답형/서술형)과, 객관식이면 "모두 고르기", 단답형·서술형이면 "교사 직접 채점" 옵션.
 function QuestionOption({ examId, question, onChanged, onEssayEnabled }: OptionProps) {
   async function toggleMultiSelect(next: boolean) {
     await api.put(`/exams/${examId}/questions/${question.id}`, { multi_select: next });
     onChanged();
   }
+  async function toggleOpenAnswer(next: boolean) {
+    await api.put(`/exams/${examId}/questions/${question.id}`, { open_answer: next });
+    onChanged();
+  }
+  const isShortOrEssay = question.type === 'short';
+  const isEssay = isShortOrEssay && question.grading_mode === 'keyword';
   return (
     <div className="flex items-center justify-center gap-2 px-2 py-1">
       <QuestionKindSelect
@@ -157,6 +170,24 @@ function QuestionOption({ examId, question, onChanged, onEssayEnabled }: OptionP
             onChange={(e) => toggleMultiSelect(e.target.checked)}
           />
           모두 고르기
+        </label>
+      )}
+      {isShortOrEssay && (
+        <label
+          className="flex cursor-pointer items-center gap-1 whitespace-nowrap text-[11px] font-bold text-ink-soft"
+          title={
+            isEssay
+              ? "선생님이 점수를 직접 주는 서술형 - 키워드 자동 채점 점수는 확정하지 않고 결과 화면 '답안 확인'에서 학생 답을 보고 점수를 줍니다. 키워드는 제안 점수용이라 비워 둬도 됩니다. 그동안 학생 결과에는 '선생님 확인 후 확정'으로 보입니다."
+              : "선생님이 직접 정답/오답을 정하는 단답형 - 적어 둔 정답과 같은 답은 바로 정답, 다른 답은 결과 화면 '답안 확인'에서 학생 답을 보고 정합니다. 그동안 학생 결과에는 '선생님 확인 후 확정'으로 보입니다."
+          }
+        >
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-accent"
+            checked={question.open_answer}
+            onChange={(e) => toggleOpenAnswer(e.target.checked)}
+          />
+          교사 직접 채점
         </label>
       )}
     </div>
@@ -192,7 +223,7 @@ export function AnswerGridInput({ examId, questions, missingByQuestion, onChange
             <th className="border-b border-line px-3 py-2 text-center text-xs font-bold text-ink-soft">문항 번호</th>
             <th className="border-b border-line px-3 py-2 text-center text-xs font-bold text-ink-soft">정답</th>
             <th
-              className="w-44 border-b border-l border-line px-2 py-2 text-center text-xs font-bold text-ink-soft"
+              className="w-52 border-b border-l border-line px-2 py-2 text-center text-xs font-bold text-ink-soft"
               title="서술형은 교사가 정한 핵심 키워드가 답에 들어 있는 만큼 부분 점수를 줍니다"
             >
               유형 · 옵션
