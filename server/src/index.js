@@ -123,9 +123,17 @@ app.use((req, res, next) => {
 
 // 프로덕션 실행: 빌드된 클라이언트 정적 파일을 같은 포트에서 서빙한다.
 if (fs.existsSync(config.clientDistDir)) {
-  app.use(express.static(config.clientDistDir));
+  // index.html은 매번 새로 받게 한다 - 캐시되면 학생 태블릿이 업데이트 뒤에도 예전 화면 코드를
+  // 계속 쓴다. JS/CSS는 파일 이름에 해시가 붙어 있어 캐시해도 안전하다.
+  const noCacheIndex = (res) => res.setHeader('Cache-Control', 'no-cache');
+  app.use(express.static(config.clientDistDir, {
+    setHeaders: (res, filePath) => {
+      if (path.basename(filePath) === 'index.html') noCacheIndex(res);
+    },
+  }));
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) return next();
+    noCacheIndex(res);
     res.sendFile(path.join(config.clientDistDir, 'index.html'));
   });
 }

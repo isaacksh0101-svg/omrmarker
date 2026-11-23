@@ -128,6 +128,8 @@ export interface ExamSession {
   current_question_index: number;
   disqualify_reason: string | null;
   answers?: SessionAnswerSummary[];
+  // 학생용 세션 조회에만 붙는 서버의 현재 시각 - 기기 시계가 틀려도 카운트다운을 맞추기 위함.
+  server_now?: string;
 }
 
 export interface PublicExam {

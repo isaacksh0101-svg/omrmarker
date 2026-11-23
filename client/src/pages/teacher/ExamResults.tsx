@@ -183,24 +183,6 @@ export function ExamResults() {
     }
   }
 
-  // 결과지 서명 받음 체크. 화면에는 바로 반영하고, 저장에 실패하면 되돌린다.
-  async function toggleSigned(sessionId: number, signed: boolean) {
-    const mark = (value: string | null) =>
-      setData((prev) =>
-        prev && {
-          ...prev,
-          sessions: prev.sessions.map((s) => (s.session_id === sessionId ? { ...s, result_signed_at: value } : s)),
-        },
-      );
-    mark(signed ? new Date().toISOString() : null);
-    try {
-      await api.put(`/exams/${id}/sessions/${sessionId}/result-signed`, { signed });
-    } catch {
-      mark(signed ? null : new Date().toISOString());
-      alert('서명 체크를 저장하지 못했습니다.');
-    }
-  }
-
   // 문항 정정 후 바뀐 정답·점수를 바로 보여준다.
   async function refreshAfterCorrection(questionId: number | null) {
     const [nextExam, nextData, breakdown] = await Promise.all([
@@ -730,9 +712,6 @@ export function ExamResults() {
               <th className="whitespace-nowrap px-3 py-2.5">제출시각</th>
               <th className="whitespace-nowrap px-3 py-2.5">확인 필요</th>
               <th className="whitespace-nowrap px-3 py-2.5">오답 재풀이</th>
-              <th className="whitespace-nowrap px-3 py-2.5" title="출력한 결과지에 학생 확인 서명을 받았으면 체크하세요">
-                서명
-              </th>
             </tr>
           </thead>
           <tbody>
@@ -794,22 +773,11 @@ export function ExamResults() {
                     </div>
                   )}
                 </td>
-                <td className="whitespace-nowrap px-3 py-2.5" onClick={(event) => event.stopPropagation()}>
-                  {s.session_id != null && (s.status === 'submitted' || s.status === 'force_submitted') && (
-                    <input
-                      type="checkbox"
-                      aria-label={`${s.roll_number}번 결과지 서명 받음`}
-                      className="h-4 w-4 cursor-pointer accent-accent"
-                      checked={!!s.result_signed_at}
-                      onChange={(event) => toggleSigned(s.session_id!, event.target.checked)}
-                    />
-                  )}
-                </td>
               </tr>
             ))}
             {visibleSessions.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-3 py-4 text-center text-ink-soft">
+                <td colSpan={7} className="px-3 py-4 text-center text-ink-soft">
                   {data.sessions.length === 0 ? '아직 참여한 학생이 없습니다.' : '조건에 맞는 학생이 없습니다.'}
                 </td>
               </tr>

@@ -144,12 +144,6 @@ export function ResultSheets() {
             <button className="font-bold text-accent hover:underline" onClick={() => setSelected(new Set())}>
               모두 해제
             </button>
-            <button
-              className="font-bold text-accent hover:underline"
-              onClick={() => setSelected(new Set(data.students.filter((s) => !s.result_signed_at).map((s) => s.session_id)))}
-            >
-              서명 안 받은 학생만
-            </button>
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {data.students.map((s) => (
@@ -157,12 +151,11 @@ export function ResultSheets() {
                 key={s.session_id}
                 type="button"
                 onClick={() => toggle(s.session_id)}
-                title={s.result_signed_at ? '서명 받음' : undefined}
                 className={`rounded-full px-2.5 py-1 text-xs font-bold ${
                   selected.has(s.session_id) ? 'bg-accent text-white' : 'bg-surface-container text-ink-soft'
                 }`}
               >
-                {s.roll_number}번{s.result_signed_at ? ' ✓' : ''}
+                {s.roll_number}번
               </button>
             ))}
           </div>

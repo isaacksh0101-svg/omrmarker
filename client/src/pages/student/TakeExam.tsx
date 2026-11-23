@@ -188,8 +188,12 @@ export function TakeExam() {
 
   // 키패드가 뜨거나 화면이 회전해 보이는 영역이 바뀌면, 드래그로 옮겨둔 위치가 화면 밖으로
   // 밀려날 수 있어 다시 안쪽으로 당겨온다.
+  // 서버 시계 - 기기 시계(ms). 학교 태블릿은 시계가 틀린 경우가 많아, 카운트다운은 이 값을
+  // 더해 서버 시계로 계산한다.
+  const clockOffsetRef = useRef(0);
   const reloadSession = useCallback(async () => {
     const s = await api.get<ExamSession>(`/exams/${id}/sessions/${sessionId}`);
+    if (s.server_now) clockOffsetRef.current = new Date(s.server_now).getTime() - Date.now();
     setSession(s);
     return s;
   }, [id, sessionId]);
@@ -210,7 +214,10 @@ export function TakeExam() {
 
   // 지금 위치(문항 또는 답안 확인 화면)를 불러온다. 이미 답했거나 필기해 둔 문항이면 그 답을
   // 입력칸에 되살린다(필기는 아래 effect에서 캔버스에 다시 그린다).
-  const loadCurrentQuestion = useCallback(async () => {
+  // autoSubmitIfComplete: 학생이 직접 문항을 넘겨 답안 확인 화면에 도착했을 때(move)만 true.
+  // 시험 화면 진입·새로고침·되살리기처럼 처음 불러올 때는 학생이 아무것도 하지 않았으므로
+  // 자동 제출하면 안 된다(이전에는 여기서도 제출돼 시작하자마자 끝나는 문제가 있었다).
+  const loadCurrentQuestion = useCallback(async ({ autoSubmitIfComplete = false } = {}) => {
     const c = await api.get<CurrentQuestionResponse>(`/exams/${id}/sessions/${sessionId}/current-question`);
     if (c.done) {
       await reloadSession();
@@ -219,8 +226,9 @@ export function TakeExam() {
     }
     // 답안 확인 화면인데 빠진 문항이 하나도 없으면, 확인 화면을 보여주지 않고 그대로
     // 제출한다 - 이 화면은 "안 푼 문제가 있으니 확인해라"는 경고용이라, 다 풀었을 때는
-    // 굳이 한 번 더 거칠 필요가 없다.
-    if (c.summary && (c.answered ?? []).every(Boolean)) {
+    // 굳이 한 번 더 거칠 필요가 없다. 문항 목록이 비어 있으면([].every는 true) 제출하지 않는다.
+    const answeredFlags = c.answered ?? [];
+    if (autoSubmitIfComplete && c.summary && answeredFlags.length > 0 && answeredFlags.every(Boolean)) {
       await finalSubmit();
       return;
     }
@@ -337,11 +345,17 @@ export function TakeExam() {
     const deadline =
       new Date(session.started_at).getTime() + (exam.time_limit_sec + (session.extra_time_sec ?? 0)) * 1000;
 
+    // 기기 시계 대신 서버 시계 기준으로 남은 시간을 센다(clockOffsetRef). 시간이 다 되면
+    // 서버에 시간 초과 제출을 한 번만 요청한다 - 서버가 다시 확인해서 아직이면 제출하지 않는다.
+    let timeoutRequested = false;
     const tick = () => {
-      const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+      const left = Math.max(0, Math.round((deadline - (Date.now() + clockOffsetRef.current)) / 1000));
       setRemainingSec(left);
-      if (left <= 0) {
-        api.post(`/exams/${id}/sessions/${sessionId}/submit`).then(reloadSession);
+      if (left <= 0 && !timeoutRequested) {
+        timeoutRequested = true;
+        api.post(`/exams/${id}/sessions/${sessionId}/submit`).then(reloadSession, () => {
+          timeoutRequested = false;
+        });
       }
     };
     tick();
@@ -634,7 +648,7 @@ export function TakeExam() {
         await reloadSession();
         setCurrent(null);
       } else {
-        await loadCurrentQuestion();
+        await loadCurrentQuestion({ autoSubmitIfComplete: true });
       }
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 409) {
@@ -677,11 +691,14 @@ export function TakeExam() {
   }
 
   if (session.status === 'submitted' || session.status === 'force_submitted') {
-    const pct =
-      session.max_score && session.max_score > 0
-        ? Math.round(((session.score ?? 0) / session.max_score) * 100)
-        : 0;
-    const pendingCount = (session.answers ?? []).filter((a) => a.confirm_pending).length;
+    // 정답률은 선생님 채점이 끝난 문항만으로 계산한다 - 채점 대기 문항은 지금 0점으로 잡혀 있어
+    // 그대로 넣으면 실제보다 낮게 보인다. 다 채점 대기면 정답률을 보여주지 않는다(null).
+    const pendingAnswers = (session.answers ?? []).filter((a) => a.confirm_pending);
+    const pendingCount = pendingAnswers.length;
+    const pendingPoints = pendingAnswers.reduce((sum, a) => sum + a.points, 0);
+    const pendingAwarded = pendingAnswers.reduce((sum, a) => sum + (a.awarded_points ?? 0), 0);
+    const gradedMax = (session.max_score ?? 0) - pendingPoints;
+    const pct = gradedMax > 0 ? Math.round((((session.score ?? 0) - pendingAwarded) / gradedMax) * 100) : null;
     return (
       <div className="mx-auto flex min-h-screen max-w-xl flex-col justify-center px-8 py-10">
         <h1 className="text-2xl font-bold text-ink">
@@ -699,7 +716,10 @@ export function TakeExam() {
           <p className="mt-1 text-3xl font-bold text-ink">
             {session.score} / {session.max_score}
           </p>
-          <p className="mt-1 text-sm text-ink-soft">정답률 {pct}%</p>
+          <p className="mt-1 text-sm text-ink-soft">
+            {pct === null ? '정답률은 선생님 확인이 끝나면 보여요' : `정답률 ${pct}%`}
+            {pct !== null && pendingCount > 0 && ' (확인 중인 문항 제외)'}
+          </p>
           {pendingCount > 0 && (
             <p className="mt-2 text-sm font-bold text-warn">
               선생님이 확인 중인 문항이 {pendingCount}개 있어요. 확인이 끝나면 점수가 확정돼요.

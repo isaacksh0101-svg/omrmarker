@@ -297,7 +297,9 @@ sessionsRouter.get('/:id/sessions/:sessionId', async (req, res) => {
   const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
   if (!session) return;
 
-  const payload = { ...session };
+  // server_now: 학생 기기 시계가 틀려 있어도(학교 태블릿은 흔하다) 카운트다운을 서버 시계
+  // 기준으로 계산하도록 함께 보낸다.
+  const payload = { ...session, server_now: new Date().toISOString() };
   if (session.status === 'submitted' || session.status === 'force_submitted') {
     payload.answers = await repo.getSessionAnswerSummary(session.id);
   }
@@ -633,6 +635,14 @@ sessionsRouter.post('/:id/sessions/:sessionId/submit', async (req, res) => {
   const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
   if (!session) return;
 
+  // 학생 화면의 카운트다운이 0이 되면 부르는 시간 초과 제출이다. 학생 기기 시계를 믿지 않고
+  // 서버 시계로 정말 시간이 지났는지 확인한다 - 기기 시계가 빠르면 시작하자마자 제출되던 문제.
+  if (session.status === 'in_progress') {
+    const exam = await repo.getExam(examId);
+    if (!exam || !isTimedOut(session, exam)) {
+      return res.json({ ...session, server_now: new Date().toISOString() });
+    }
+  }
   await repo.finalizeSession(session.id);
   emitExamMonitorUpdate(examId);
   res.json(await repo.getSession(session.id));
