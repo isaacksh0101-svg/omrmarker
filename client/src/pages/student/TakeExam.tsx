@@ -699,17 +699,29 @@ export function TakeExam() {
     const pendingAwarded = pendingAnswers.reduce((sum, a) => sum + (a.awarded_points ?? 0), 0);
     const gradedMax = (session.max_score ?? 0) - pendingPoints;
     const pct = gradedMax > 0 ? Math.round((((session.score ?? 0) - pendingAwarded) / gradedMax) * 100) : null;
+    // 화면 이탈로 강제 종료되면 결과를 보여주지 않는다(서버도 점수·답안 결과를 보내지 않는다) -
+    // 결과를 본 뒤 되살리기로 틀린 답을 고쳐 내는 일을 막기 위함. 선생님이 종료한 경우는 보여준다.
+    if (session.status === 'force_submitted' && session.disqualify_reason !== 'teacher_manual') {
+      return (
+        <div className="mx-auto flex min-h-screen max-w-xl flex-col justify-center px-8 py-10">
+          <h1 className="text-2xl font-bold text-ink">시험이 강제 종료되었습니다</h1>
+          <p className="mt-1 text-sm text-ink-soft">
+            다른 화면으로 이동한 것이 감지되어 자동으로 제출되었습니다. 실수였다면 선생님께 말씀해주세요.
+          </p>
+          <p className="mt-4 text-sm text-ink-soft">결과는 선생님께 확인해주세요.</p>
+          <div className="mt-7 flex flex-wrap gap-2">
+            <Button onClick={() => navigate('/student')}>다른 시험 응시하기</Button>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="mx-auto flex min-h-screen max-w-xl flex-col justify-center px-8 py-10">
         <h1 className="text-2xl font-bold text-ink">
-          {session.status === 'force_submitted' ? '시험이 강제 종료되었습니다' : '제출 완료'}
+          {session.status === 'force_submitted' ? '시험이 종료되었습니다' : '제출 완료'}
         </h1>
         {session.status === 'force_submitted' && (
-          <p className="mt-1 text-sm text-ink-soft">
-            {session.disqualify_reason === 'screen_leave'
-              ? '다른 화면으로 이동한 것이 감지되어 자동으로 제출되었습니다. 실수였다면 선생님께 말씀해주세요.'
-              : '선생님이 시험을 종료했습니다.'}
-          </p>
+          <p className="mt-1 text-sm text-ink-soft">선생님이 시험을 종료했습니다.</p>
         )}
         <Card className="mt-5">
           <p className="text-xs font-bold text-ink-soft">점수</p>

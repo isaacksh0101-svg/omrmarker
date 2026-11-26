@@ -292,6 +292,18 @@ async function getSessionByTokenOr404(examId, token, res) {
   return session;
 }
 
+// 화면 이탈로 강제 종료된 응시는 학생에게 결과를 숨긴다 - 결과(어느 문항을 틀렸는지)를 본 뒤
+// 교사가 "되살리기"를 하면 틀린 답을 고쳐 낼 수 있기 때문. 교사가 직접 종료한 경우
+// (teacher_manual, 시간 다 돼서 전체 종료 등)는 정상 제출처럼 결과를 보여준다.
+function isResultHiddenFromStudent(session) {
+  return session?.status === 'force_submitted' && session.disqualify_reason !== 'teacher_manual';
+}
+
+function studentSessionView(session) {
+  if (!isResultHiddenFromStudent(session)) return session;
+  return { ...session, score: null, max_score: null, results_hidden: true };
+}
+
 sessionsRouter.get('/:id/sessions/:sessionId', async (req, res) => {
   const examId = Number(req.params.id);
   const session = await getSessionByTokenOr404(examId, req.params.sessionId, res);
@@ -299,8 +311,8 @@ sessionsRouter.get('/:id/sessions/:sessionId', async (req, res) => {
 
   // server_now: 학생 기기 시계가 틀려 있어도(학교 태블릿은 흔하다) 카운트다운을 서버 시계
   // 기준으로 계산하도록 함께 보낸다.
-  const payload = { ...session, server_now: new Date().toISOString() };
-  if (session.status === 'submitted' || session.status === 'force_submitted') {
+  const payload = { ...studentSessionView(session), server_now: new Date().toISOString() };
+  if ((session.status === 'submitted' || session.status === 'force_submitted') && !isResultHiddenFromStudent(session)) {
     payload.answers = await repo.getSessionAnswerSummary(session.id);
   }
   res.json(payload);
@@ -645,7 +657,7 @@ sessionsRouter.post('/:id/sessions/:sessionId/submit', async (req, res) => {
   }
   await repo.finalizeSession(session.id);
   emitExamMonitorUpdate(examId);
-  res.json(await repo.getSession(session.id));
+  res.json(studentSessionView(await repo.getSession(session.id)));
 });
 
 // ---- 교사 배정형 오답 재풀이 ----
